@@ -203,10 +203,8 @@ def _cc_event_score(event):
     return 0.0
 
 
+
 def _cc_match_score_label(event):
-    """Human-friendly badge text for recommendation score.
-    Handles raw model scores on a 0-1 or 0-100 scale.
-    """
     try:
         score = float(_cc_event_score(event))
     except Exception:
@@ -215,11 +213,8 @@ def _cc_match_score_label(event):
         return "Match Score —"
     if 0 < score <= 1:
         score *= 100.0
-    if score >= 10:
-        return f"Match Score {score:.0f}"
+    score = max(0.0, min(score, 99.0))
     return f"Match Score {score:.1f}"
-
-
 
 def _cc_clean_text(v):
     if v is None:
@@ -474,18 +469,76 @@ def _cc_add_spotify_fields(event):
     return event
 
 def _dedupe_events_for_display(events):
-    out = []
-    seen = set()
+    """Aggressively merge visually duplicated events across Ticketmaster/SeatGeek."""
+    from difflib import SequenceMatcher as _SM
+    def clean(v):
+        if v is None:
+            return ""
+        return "".join(ch.lower() for ch in str(v).strip() if ch.isalnum())
+    def pick(event, keys):
+        if not isinstance(event, dict):
+            return ""
+        for key in keys:
+            val = event.get(key)
+            if val is not None and str(val).strip() and str(val).lower() not in ("none", "nan", "tbd"):
+                return val
+        raw = event.get("raw_json") or event.get("raw") or {}
+        if isinstance(raw, dict):
+            for key in keys:
+                val = raw.get(key)
+                if val is not None and str(val).strip() and str(val).lower() not in ("none", "nan", "tbd"):
+                    return val
+            dates = raw.get("dates") or {}
+            if isinstance(dates, dict):
+                start = dates.get("start") or {}
+                if isinstance(start, dict):
+                    if "date" in " ".join(keys).lower():
+                        return start.get("localDate") or start.get("dateTime") or ""
+                    if "time" in " ".join(keys).lower():
+                        return start.get("localTime") or start.get("dateTime") or ""
+        return ""
+    def title(event): return str(pick(event, ["event_name", "title", "name"]))
+    def venue(event): return str(pick(event, ["venue", "venue_name", "location"]))
+    def city(event): return str(pick(event, ["city", "venue_city"]))
+    def date_val(event): return str(pick(event, ["event_date", "date", "localDate", "datetime_local", "event_datetime", "start_date", "date_display"]))[:10]
+    def time_val(event): return str(pick(event, ["event_time", "time", "localTime", "datetime_local", "event_datetime", "start_time", "time_display"]))[:5]
+    def headliner(event):
+        artists = event.get("artists") if isinstance(event, dict) else []
+        if artists:
+            first = str(artists[0] or "").strip()
+            if first:
+                return clean(first)
+        t = str(title(event)).lower()
+        t = re.sub(r".*\bpresents\b", " ", t).strip()
+        t = re.split(r"\s+(?:with|w/|feat\.?|featuring|and)\s+|\s[-–—:]\s", t)[0]
+        t = re.sub(r"\b(tickets|official|live|concert|tour|event|music|festival|weekend|one|two|the)\b", " ", t)
+        return clean(t)
+    out, seen_exact = [], set()
     for event in events or []:
         if not isinstance(event, dict):
             continue
-        event = _cc_add_spotify_fields(event)
-        key = (_cc_norm_text(_cc_event_title(event)), _cc_norm_text(_cc_event_venue(event)), _cc_norm_text(_cc_event_city(event)), str(_cc_event_date(event))[:10], str(_cc_event_time(event))[:5])
-        if not any(key):
-            key = ("id", _cc_norm_text(_cc_event_id(event)))
-        if key in seen:
+        d, tm, v, c, h = date_val(event), time_val(event), clean(venue(event)), clean(city(event)), headliner(event)
+        t_clean = clean(title(event))
+        exact_key = (d, tm, v, c, h or t_clean[:50])
+        if exact_key in seen_exact:
             continue
-        seen.add(key)
+        duplicate = False
+        for kept in out:
+            kd, ktm, kv, kc, kh = date_val(kept), time_val(kept), clean(venue(kept)), clean(city(kept)), headliner(kept)
+            if d != kd:
+                continue
+            same_place = (v and kv and v == kv) or (c and kc and c == kc)
+            same_time = bool(tm and ktm and tm == ktm)
+            if not same_place:
+                continue
+            title_score = _SM(None, clean(title(event)), clean(title(kept))).ratio()
+            head_score = _SM(None, h, kh).ratio() if h and kh else 0.0
+            if head_score >= 0.72 or title_score >= 0.72 or (same_time and max(head_score, title_score) >= 0.42):
+                duplicate = True
+                break
+        if duplicate:
+            continue
+        seen_exact.add(exact_key)
         out.append(event)
     return out
 
@@ -603,25 +656,79 @@ def _cc_api_keyword(keyword):
 
 
 def _dedupe_events_for_display(events):
-    """Dedupe visually identical concerts before rendering/pooling."""
-    out = []
-    seen = set()
+    """Aggressively merge visually duplicated events across Ticketmaster/SeatGeek."""
+    from difflib import SequenceMatcher as _SM
+    def clean(v):
+        if v is None:
+            return ""
+        return "".join(ch.lower() for ch in str(v).strip() if ch.isalnum())
+    def pick(event, keys):
+        if not isinstance(event, dict):
+            return ""
+        for key in keys:
+            val = event.get(key)
+            if val is not None and str(val).strip() and str(val).lower() not in ("none", "nan", "tbd"):
+                return val
+        raw = event.get("raw_json") or event.get("raw") or {}
+        if isinstance(raw, dict):
+            for key in keys:
+                val = raw.get(key)
+                if val is not None and str(val).strip() and str(val).lower() not in ("none", "nan", "tbd"):
+                    return val
+            dates = raw.get("dates") or {}
+            if isinstance(dates, dict):
+                start = dates.get("start") or {}
+                if isinstance(start, dict):
+                    if "date" in " ".join(keys).lower():
+                        return start.get("localDate") or start.get("dateTime") or ""
+                    if "time" in " ".join(keys).lower():
+                        return start.get("localTime") or start.get("dateTime") or ""
+        return ""
+    def title(event): return str(pick(event, ["event_name", "title", "name"]))
+    def venue(event): return str(pick(event, ["venue", "venue_name", "location"]))
+    def city(event): return str(pick(event, ["city", "venue_city"]))
+    def date_val(event): return str(pick(event, ["event_date", "date", "localDate", "datetime_local", "event_datetime", "start_date", "date_display"]))[:10]
+    def time_val(event): return str(pick(event, ["event_time", "time", "localTime", "datetime_local", "event_datetime", "start_time", "time_display"]))[:5]
+    def headliner(event):
+        artists = event.get("artists") if isinstance(event, dict) else []
+        if artists:
+            first = str(artists[0] or "").strip()
+            if first:
+                return clean(first)
+        t = str(title(event)).lower()
+        t = re.sub(r".*\bpresents\b", " ", t).strip()
+        t = re.split(r"\s+(?:with|w/|feat\.?|featuring|and)\s+|\s[-–—:]\s", t)[0]
+        t = re.sub(r"\b(tickets|official|live|concert|tour|event|music|festival|weekend|one|two|the)\b", " ", t)
+        return clean(t)
+    out, seen_exact = [], set()
     for event in events or []:
         if not isinstance(event, dict):
             continue
-        title = _cc_event_title(event)
-        venue = _cc_event_venue(event)
-        city = _cc_event_city(event)
-        date = str(_cc_event_date(event))[:10]
-        time = str(_cc_event_time(event))[:5]
-        key = (_cc_norm_text(title), _cc_norm_text(venue), _cc_norm_text(city), _cc_norm_text(date), _cc_norm_text(time))
-        if not any(key):
-            key = ("id", _cc_norm_text(_cc_event_id(event)))
-        if key in seen:
+        d, tm, v, c, h = date_val(event), time_val(event), clean(venue(event)), clean(city(event)), headliner(event)
+        t_clean = clean(title(event))
+        exact_key = (d, tm, v, c, h or t_clean[:50])
+        if exact_key in seen_exact:
             continue
-        seen.add(key)
+        duplicate = False
+        for kept in out:
+            kd, ktm, kv, kc, kh = date_val(kept), time_val(kept), clean(venue(kept)), clean(city(kept)), headliner(kept)
+            if d != kd:
+                continue
+            same_place = (v and kv and v == kv) or (c and kc and c == kc)
+            same_time = bool(tm and ktm and tm == ktm)
+            if not same_place:
+                continue
+            title_score = _SM(None, clean(title(event)), clean(title(kept))).ratio()
+            head_score = _SM(None, h, kh).ratio() if h and kh else 0.0
+            if head_score >= 0.72 or title_score >= 0.72 or (same_time and max(head_score, title_score) >= 0.42):
+                duplicate = True
+                break
+        if duplicate:
+            continue
+        seen_exact.add(exact_key)
         out.append(event)
     return out
+
 
 # === end HOTFIX V34 helpers ===
 
@@ -658,6 +765,8 @@ def cached_event_search(
     seatgeek_pages,
     start_date,
     end_date,
+    price_enrichment_limit,
+    max_targeted_artists,
     venue_name,
     targeted_artists,
 ):
@@ -677,9 +786,9 @@ def cached_event_search(
         end_date=end_date,
         venue_name=venue_name or None,
         targeted_artist_names=list(targeted_artists),
-        max_targeted_artists=30,
+        max_targeted_artists=max_targeted_artists,
         smart_artist_search=True,
-        price_enrichment_limit=40,
+        price_enrichment_limit=price_enrichment_limit,
     )
 
 
@@ -957,21 +1066,28 @@ def event_links(event):
     return [url for url in (event.get("all_urls") or [event.get("url")]) if url]
 
 
+
 def price_label(event):
     minimum = event.get("min_price")
     maximum = event.get("max_price")
     median = event.get("median_price")
     average = event.get("average_price")
+    source = str(event.get("price_source") or "").strip()
+    suffix = ""
+    if source:
+        if "SeatGeek" in source:
+            suffix = " · SeatGeek"
+        elif "Ticketmaster" in source:
+            suffix = " · Ticketmaster"
     if isinstance(minimum, (int, float)):
         if isinstance(maximum, (int, float)) and maximum > minimum and maximum <= minimum * 4:
-            return f"${minimum:.0f}–${maximum:.0f}", "badge-price"
-        return f"From ${minimum:.0f}", "badge-price"
+            return f"${minimum:.0f}–${maximum:.0f}{suffix}", "badge-price"
+        return f"From ${minimum:.0f}{suffix}", "badge-price"
     if isinstance(median, (int, float)):
-        return f"Typical ${median:.0f}", "badge-price"
+        return f"Typical ${median:.0f}{suffix}", "badge-price"
     if isinstance(average, (int, float)):
-        return f"Avg ${average:.0f}", "badge-price"
-    return "Check live price", "badge-warn"
-
+        return f"Avg ${average:.0f}{suffix}", "badge-price"
+    return "Price not listed", "badge-muted"
 
 def model_status():
     bundle = load_feedback_model("current")
@@ -1015,7 +1131,7 @@ def annotate_group_fit(events, primary_artists, second_artists, primary_name, se
 
 def render_badges(event, extra_badge=None):
     price, price_class = price_label(event)
-    lane = event.get("winning_genre_cluster_label") or event.get("genre") or "Music"
+    lane = _cc_display_lane(event)
     confidence = event.get("match_confidence") or "Taste match"
     source_count = human_source_count(event)
     multi = " · multi-source confirmed" if source_count > 1 else ""
@@ -1088,6 +1204,18 @@ def spotify_link_html(event):
     return "".join(parts)
 
 
+
+def _cc_display_lane(event):
+    lane = event.get("winning_genre_cluster_label") or event.get("genre") or event.get("subgenre")
+    lane = str(lane or "").strip()
+    bad = {"", "none", "nan", "music", "unclear taste lane", "undefined", "miscellaneous"}
+    if lane.lower() in bad:
+        lane = str(event.get("subgenre") or event.get("genre") or "").strip()
+    if not lane or lane.lower() in bad:
+        lane = "Music discovery"
+    return lane
+
+
 def reason_tags_html(event):
     tags = event.get("reason_tags") or []
     if not tags:
@@ -1100,7 +1228,7 @@ def render_event_card(event: Dict[str, Any], idx: int, section: str, user, sessi
     venue_line = f"{event.get('venue') or 'Venue TBD'} · {event.get('city') or ''}, {event.get('state') or ''}".strip(" ·,")
     when = format_when(event)
     price_text, price_class = price_label(event)
-    lane = event.get("winning_genre_cluster_label") or event.get("genre") or "Music"
+    lane = _cc_display_lane(event)
     confidence = event.get("match_confidence") or "Taste match"
     why = event.get("why_artist_match") or event.get("why_recommended") or "This event matches your broader listening profile."
     lane_copy = event.get("why_taste_lane") or ""
@@ -1176,7 +1304,8 @@ def render_event_card(event: Dict[str, Any], idx: int, section: str, user, sessi
             action_cols = st.columns([1.0, 0.07, 1.0, 0.75, 1.0, 2.2], vertical_alignment="center")
             with action_cols[0]:
                 if links:
-                    st.link_button("Tickets →", links[0], type="primary", use_container_width=True)
+                    ticket_label = "Tickets / live price →" if price_text == "Price not listed" else "Tickets →"
+                    st.link_button(ticket_label, links[0], type="primary", use_container_width=True)
                 else:
                     st.button("Tickets →", key=f"tickets_disabled_{section}_{session_id}_{event.get('event_id')}_{idx}", disabled=True, use_container_width=True)
                 try:
@@ -1237,6 +1366,19 @@ with st.sidebar:
         index=0,
     )
 
+    search_speed = st.selectbox(
+        "Search speed",
+        ["Fast demo", "Balanced", "Deep search"],
+        index=0,
+        help="Fast demo is best for testing. Deep search finds more shows/prices but is slower.",
+    )
+    speed_profiles = {
+        "Fast demo": {"size": 80, "ticketmaster_pages": 1, "seatgeek_pages": 1, "top_artist_search_count": 10, "price_enrichment_limit": 8, "display_page_size": 20},
+        "Balanced": {"size": 120, "ticketmaster_pages": 2, "seatgeek_pages": 2, "top_artist_search_count": 15, "price_enrichment_limit": 15, "display_page_size": 30},
+        "Deep search": {"size": 200, "ticketmaster_pages": 5, "seatgeek_pages": 5, "top_artist_search_count": 30, "price_enrichment_limit": 40, "display_page_size": 40},
+    }
+    speed_config = speed_profiles[search_speed]
+
     with st.expander("More options"):
         st.caption("Sources, page depth, dedupe, and price enrichment are automatic in V21.")
         group_mode = st.checkbox("Blend a second listener", value=False)
@@ -1262,14 +1404,17 @@ with st.sidebar:
         st.caption("For a clean recommender test, turn both off, then click Get recommendations.")
 
     # Product defaults: keep technical source choices out of the main UI.
-    size = 200
+    size = int(speed_config["size"])
     grouping_mode = "Collapse repeated dates"
     search_top_artists = True
     use_ticketmaster = True
     use_seatgeek = True
     use_songkick = False
-    ticketmaster_pages = 5
-    seatgeek_pages = 5
+    ticketmaster_pages = int(speed_config["ticketmaster_pages"])
+    seatgeek_pages = int(speed_config["seatgeek_pages"])
+    price_enrichment_limit = int(speed_config["price_enrichment_limit"])
+    display_page_size = int(speed_config["display_page_size"])
+    top_artist_search_count = min(int(top_artist_search_count), int(speed_config["top_artist_search_count"]))
 
     status = model_status()
     if not use_feedback_model_toggle:
@@ -1335,7 +1480,7 @@ if run:
             city, state, "US", radius, size, keyword.strip(),
             use_ticketmaster, use_seatgeek, use_songkick,
             ticketmaster_pages, seatgeek_pages,
-            start_date, end_date, venue_name,
+            start_date, end_date, price_enrichment_limit, top_artist_search_count, venue_name,
             tuple(targeted_artists),
         )
 
@@ -1392,6 +1537,9 @@ if run:
             "model_weight": float(current_model.get("recommended_model_weight") or 0.20) if use_trained_model else 0.0,
             "use_feedback_model": bool(use_feedback_model_toggle),
             "use_saved_history": bool(use_saved_history_toggle),
+            "search_speed": search_speed,
+            "display_page_size": display_page_size,
+            "price_enrichment_limit": price_enrichment_limit,
                 "sidebar_keyword": keyword.strip(),
         },
     }
@@ -1413,6 +1561,7 @@ ranked_events = run_data["ranked_events"]
 source_counts = run_data["source_counts"]
 use_saved_history_toggle = bool(run_data.get("filters", {}).get("use_saved_history", True))
 use_feedback_model_toggle = bool(run_data.get("filters", {}).get("use_feedback_model", True))
+display_page_size = int(run_data.get("filters", {}).get("display_page_size", 20))
 ranked_df = pd.DataFrame(ranked_events)
 artists_df = pd.DataFrame(top_artists)
 tracks_df = pd.DataFrame(top_tracks)
@@ -1449,24 +1598,24 @@ main_tabs = st.tabs(["Discover", "My Playlist", "Copilot", "Taste by Season", "B
 
 
 def _dedupe_events_for_display(events):
-    """Dedupe visually identical concerts before rendering Discover/My Playlist/Copilot pools."""
+    """Aggressively merge visually duplicated events across Ticketmaster/SeatGeek."""
+    from difflib import SequenceMatcher as _SM
     def clean(v):
         if v is None:
             return ""
         return "".join(ch.lower() for ch in str(v).strip() if ch.isalnum())
-
     def pick(event, keys):
         if not isinstance(event, dict):
             return ""
         for key in keys:
             val = event.get(key)
-            if val is not None and str(val).strip() and str(val).lower() not in ("none", "nan"):
+            if val is not None and str(val).strip() and str(val).lower() not in ("none", "nan", "tbd"):
                 return val
         raw = event.get("raw_json") or event.get("raw") or {}
         if isinstance(raw, dict):
             for key in keys:
                 val = raw.get(key)
-                if val is not None and str(val).strip() and str(val).lower() not in ("none", "nan"):
+                if val is not None and str(val).strip() and str(val).lower() not in ("none", "nan", "tbd"):
                     return val
             dates = raw.get("dates") or {}
             if isinstance(dates, dict):
@@ -1477,27 +1626,51 @@ def _dedupe_events_for_display(events):
                     if "time" in " ".join(keys).lower():
                         return start.get("localTime") or start.get("dateTime") or ""
         return ""
-
-    out = []
-    seen = set()
+    def title(event): return str(pick(event, ["event_name", "title", "name"]))
+    def venue(event): return str(pick(event, ["venue", "venue_name", "location"]))
+    def city(event): return str(pick(event, ["city", "venue_city"]))
+    def date_val(event): return str(pick(event, ["event_date", "date", "localDate", "datetime_local", "event_datetime", "start_date", "date_display"]))[:10]
+    def time_val(event): return str(pick(event, ["event_time", "time", "localTime", "datetime_local", "event_datetime", "start_time", "time_display"]))[:5]
+    def headliner(event):
+        artists = event.get("artists") if isinstance(event, dict) else []
+        if artists:
+            first = str(artists[0] or "").strip()
+            if first:
+                return clean(first)
+        t = str(title(event)).lower()
+        t = re.sub(r".*\bpresents\b", " ", t).strip()
+        t = re.split(r"\s+(?:with|w/|feat\.?|featuring|and)\s+|\s[-–—:]\s", t)[0]
+        t = re.sub(r"\b(tickets|official|live|concert|tour|event|music|festival|weekend|one|two|the)\b", " ", t)
+        return clean(t)
+    out, seen_exact = [], set()
     for event in events or []:
         if not isinstance(event, dict):
             continue
-        title = pick(event, ["event_name", "title", "name"])
-        venue = pick(event, ["venue", "venue_name", "location"])
-        city = pick(event, ["city", "venue_city"])
-        date = pick(event, ["event_date", "date", "localDate", "datetime_local", "event_datetime", "start_date", "date_display"])
-        time = pick(event, ["event_time", "time", "localTime", "datetime_local", "event_datetime", "start_time", "time_display"])
-        eid = event.get("event_id") or event.get("external_event_id") or event.get("id")
-        # Prefer human-visible identity. Event APIs sometimes return different IDs for the same bill.
-        key = (clean(title), clean(venue), clean(city), clean(str(date)[:10]), clean(str(time)[:5]))
-        if not any(key):
-            key = ("id", clean(eid))
-        if key in seen:
+        d, tm, v, c, h = date_val(event), time_val(event), clean(venue(event)), clean(city(event)), headliner(event)
+        t_clean = clean(title(event))
+        exact_key = (d, tm, v, c, h or t_clean[:50])
+        if exact_key in seen_exact:
             continue
-        seen.add(key)
+        duplicate = False
+        for kept in out:
+            kd, ktm, kv, kc, kh = date_val(kept), time_val(kept), clean(venue(kept)), clean(city(kept)), headliner(kept)
+            if d != kd:
+                continue
+            same_place = (v and kv and v == kv) or (c and kc and c == kc)
+            same_time = bool(tm and ktm and tm == ktm)
+            if not same_place:
+                continue
+            title_score = _SM(None, clean(title(event)), clean(title(kept))).ratio()
+            head_score = _SM(None, h, kh).ratio() if h and kh else 0.0
+            if head_score >= 0.72 or title_score >= 0.72 or (same_time and max(head_score, title_score) >= 0.42):
+                duplicate = True
+                break
+        if duplicate:
+            continue
+        seen_exact.add(exact_key)
         out.append(event)
     return out
+
 
 # ---------------- Discover ----------------
 with main_tabs[0]:
@@ -1552,6 +1725,7 @@ with main_tabs[0]:
 
     visible = _dedupe_events_for_display(visible)
     st.caption(caption)
+    visible = _cc_limit_visible_events(visible, key=f"discover_{session_id}", page_size=display_page_size)
 
     if not visible:
         st.info("No concerts match the current filters. Clear search, widen filters, or turn on Hidden.")

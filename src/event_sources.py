@@ -18,33 +18,47 @@ def normalize_name(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-def _event_identity(event: Dict[str, Any]) -> str:
-    artists = sorted({normalize_name(a) for a in (event.get("artists") or []) if a})
+
+def _title_for_dedupe(event: Dict[str, Any]) -> str:
+    title = normalize_name(event.get("event_name") or event.get("title") or event.get("name") or "")
+    title = re.sub(r"\b(tickets|official|live|concert|tour|event|presented by|with special guests?)\b", " ", title)
+    return re.sub(r"\s+", " ", title).strip()
+
+
+def _headliner_for_dedupe(event: Dict[str, Any]) -> str:
+    artists = [normalize_name(a) for a in (event.get("artists") or []) if normalize_name(a)]
     if artists:
-        return " ".join(artists[:3])
-    return normalize_name(event.get("event_name"))
+        return artists[0]
+    title = _title_for_dedupe(event)
+    title = re.sub(r".*\bpresents\b", " ", title).strip()
+    title = re.split(r"\s+(?:with|w|feat|featuring|and)\s+|\s[-–—:]\s", title)[0].strip()
+    return normalize_name(title)
+
+
+def _event_identity(event: Dict[str, Any]) -> str:
+    return _headliner_for_dedupe(event) or _title_for_dedupe(event)
 
 
 def dedupe_key(event: Dict[str, Any]) -> Tuple[str, str, str]:
-    # City is more stable than venue wording across ticketing sources.
-    return (
-        _event_identity(event)[:100],
-        str(event.get("date") or ""),
-        normalize_name(event.get("city") or event.get("venue"))[:80],
-    )
+    return (_event_identity(event)[:100], str(event.get("date") or ""), normalize_name(event.get("city") or event.get("venue"))[:80])
 
 
 def _similar_event(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
     if str(a.get("date") or "") != str(b.get("date") or ""):
         return False
-    if normalize_name(a.get("city")) and normalize_name(b.get("city")):
-        if normalize_name(a.get("city")) != normalize_name(b.get("city")):
-            return False
-    title_score = SequenceMatcher(None, normalize_name(a.get("event_name")), normalize_name(b.get("event_name"))).ratio()
-    artist_score = SequenceMatcher(None, _event_identity(a), _event_identity(b)).ratio()
-    venue_score = SequenceMatcher(None, normalize_name(a.get("venue")), normalize_name(b.get("venue"))).ratio()
-    return artist_score >= 0.82 or (title_score >= 0.70 and venue_score >= 0.45)
-
+    a_city, b_city = normalize_name(a.get("city")), normalize_name(b.get("city"))
+    if a_city and b_city and a_city != b_city:
+        return False
+    a_time, b_time = str(a.get("time") or "")[:5], str(b.get("time") or "")[:5]
+    same_time = bool(a_time and b_time and a_time == b_time)
+    a_title, b_title = _title_for_dedupe(a), _title_for_dedupe(b)
+    a_id, b_id = _event_identity(a), _event_identity(b)
+    a_venue, b_venue = normalize_name(a.get("venue")), normalize_name(b.get("venue"))
+    title_score = SequenceMatcher(None, a_title, b_title).ratio() if a_title and b_title else 0.0
+    id_score = SequenceMatcher(None, a_id, b_id).ratio() if a_id and b_id else 0.0
+    venue_score = SequenceMatcher(None, a_venue, b_venue).ratio() if a_venue and b_venue else 0.0
+    cross_score = max(SequenceMatcher(None, a_id, b_title).ratio() if a_id and b_title else 0.0, SequenceMatcher(None, b_id, a_title).ratio() if b_id and a_title else 0.0)
+    return id_score >= 0.72 or cross_score >= 0.72 or title_score >= 0.74 or (same_time and venue_score >= 0.55 and max(id_score, cross_score, title_score) >= 0.42) or (title_score >= 0.60 and venue_score >= 0.35)
 
 def _date_in_range(event: Dict[str, Any], start_date: Optional[str], end_date: Optional[str]) -> bool:
     event_date = event.get("date")
