@@ -1248,6 +1248,19 @@ with st.sidebar:
         refresh_taste = st.checkbox("Refresh Spotify taste", value=False)
         top_artist_search_count = st.slider("Top Spotify artists searched directly", 10, 40, 30, step=5)
 
+    with st.expander("Testing controls"):
+        use_feedback_model_toggle = st.checkbox(
+            "Use feedback model",
+            value=True,
+            help="Turn off to test pure Spotify/taste ranking without the 507-rating model.",
+        )
+        use_saved_history_toggle = st.checkbox(
+            "Use saved Want/Maybe history",
+            value=True,
+            help="Turn off to hide old saved badges, saved-first sorting, hidden history, and My Playlist memory for a clean cold-start test.",
+        )
+        st.caption("For a clean recommender test, turn both off, then click Get recommendations.")
+
     # Product defaults: keep technical source choices out of the main UI.
     size = 200
     grouping_mode = "Collapse repeated dates"
@@ -1259,6 +1272,13 @@ with st.sidebar:
     seatgeek_pages = 5
 
     status = model_status()
+    if not use_feedback_model_toggle:
+        status = {
+            "active": False,
+            "label": "Feedback model off",
+            "detail": "Test mode: using Spotify/taste ranking only.",
+            "bundle": None,
+        }
     status_class = "" if status["active"] else " status-base"
     st.markdown(f'<span class="status-pill{status_class}">{status["label"]}</span>', unsafe_allow_html=True)
     st.caption(status["detail"])
@@ -1326,7 +1346,7 @@ if run:
             st.json(result["counts"]["errors"])
         st.stop()
 
-    current_model = load_feedback_model("current")
+    current_model = load_feedback_model("current") if use_feedback_model_toggle else None
     use_trained_model = current_model is not None
     with st.spinner("Ranking concerts for your taste..."):
         ranked_raw = rank_events_v6(
@@ -1370,6 +1390,8 @@ if run:
             "grouping_mode": grouping_mode,
             "model_active": use_trained_model,
             "model_weight": float(current_model.get("recommended_model_weight") or 0.20) if use_trained_model else 0.0,
+            "use_feedback_model": bool(use_feedback_model_toggle),
+            "use_saved_history": bool(use_saved_history_toggle),
                 "sidebar_keyword": keyword.strip(),
         },
     }
@@ -1389,10 +1411,12 @@ top_artists = run_data["top_artists"]
 top_tracks = run_data["top_tracks"]
 ranked_events = run_data["ranked_events"]
 source_counts = run_data["source_counts"]
+use_saved_history_toggle = bool(run_data.get("filters", {}).get("use_saved_history", True))
+use_feedback_model_toggle = bool(run_data.get("filters", {}).get("use_feedback_model", True))
 ranked_df = pd.DataFrame(ranked_events)
 artists_df = pd.DataFrame(top_artists)
 tracks_df = pd.DataFrame(top_tracks)
-rated_event_ids = get_user_rated_event_ids(user.get("user_id", "unknown_user"))
+rated_event_ids = get_user_rated_event_ids(user.get("user_id", "unknown_user")) if use_saved_history_toggle else set()
 
 price_count = sum(
     1 for event in ranked_events
@@ -1407,8 +1431,11 @@ bundle = load_feedback_model("current") if active_model else None
 ranked_events = _dedupe_events_for_display(ranked_events)
 render_stats_strip(len(ranked_events), direct_count, price_coverage, bool(active_model), bundle)
 
-# Playlist memory is shared across Discover, My Playlist, and Copilot.
-playlist_memory_df = load_playlist_preferences(user.get("user_id", "unknown_user"))
+# Playlist memory is shared across Discover, My Playlist, and Copilot unless test mode disables it.
+if use_saved_history_toggle:
+    playlist_memory_df = load_playlist_preferences(user.get("user_id", "unknown_user"))
+else:
+    playlist_memory_df = pd.DataFrame()
 playlist_memory_events = [] if playlist_memory_df.empty else [interaction_row_to_event(row) for row in playlist_memory_df.to_dict(orient="records")]
 active_playlist_events = [] if playlist_memory_df.empty else [interaction_row_to_event(row) for row in playlist_memory_df[playlist_memory_df["action"].isin(["want_to_go", "maybe"])].to_dict(orient="records")]
 
@@ -1474,7 +1501,10 @@ def _dedupe_events_for_display(events):
 
 # ---------------- Discover ----------------
 with main_tabs[0]:
-    prefs_df, status_by_id, hidden_ids = preference_maps(user.get("user_id", "unknown_user"))
+    if use_saved_history_toggle:
+        prefs_df, status_by_id, hidden_ids = preference_maps(user.get("user_id", "unknown_user"))
+    else:
+        prefs_df, status_by_id, hidden_ids = pd.DataFrame(), {}, set()
     base_events = _dedupe_events_for_display([_cc_add_spotify_fields(e) for e in (ranked_events or [])])
     venues = sorted({ _cc_event_venue(e) for e in base_events if _cc_event_venue(e) })
     city_values_current = sorted({ _cc_event_city(e) for e in base_events if _cc_event_city(e) })
@@ -1511,16 +1541,22 @@ with main_tabs[0]:
     if not show_hidden:
         visible = [event for event in visible if str(event.get("event_id")) not in hidden_ids and str(event.get("event_id")) not in st.session_state.hidden_event_ids]
 
-    # V41 automatic ranking: saved Want first, saved Maybe second, then Match Score.
-    visible = _cc_sort_saved_first(visible, status_by_id)
+    if use_saved_history_toggle:
+        # Normal product mode: saved Want first, saved Maybe second, then Match Score.
+        visible = _cc_sort_saved_first(visible, status_by_id)
+        caption = f"Showing {len(visible)} of {len(base_events)} loaded shows. Saved Want and Maybe stay first, then new shows rank by Match Score."
+    else:
+        # Clean test mode: ignore saved-first memory and rank by current recommender score only.
+        visible = sorted(visible, key=lambda e: _cc_event_score(e), reverse=True)
+        caption = f"Clean test: showing {len(visible)} of {len(base_events)} loaded shows. Saved history is ignored; current ranking score only."
 
     visible = _dedupe_events_for_display(visible)
-    st.caption(f"Showing {len(visible)} of {len(base_events)} loaded shows. Saved Want and Maybe stay first, then new shows rank by Match Score.")
+    st.caption(caption)
 
     if not visible:
         st.info("No concerts match the current filters. Clear search, widen filters, or turn on Hidden.")
     for index, event in enumerate(visible, 1):
-        saved_badge = preference_label(status_by_id.get(str(event.get("event_id"))))
+        saved_badge = preference_label(status_by_id.get(str(event.get("event_id")))) if use_saved_history_toggle else None
         extra = saved_badge or event.get("group_fit_label")
         render_event_card(event, index, "feed", user, session_id, extra)
 
@@ -1529,9 +1565,11 @@ with main_tabs[0]:
 with main_tabs[1]:
     st.markdown('<div class="section-head">My Playlist</div>', unsafe_allow_html=True)
     st.markdown('<div class="section-sub">Every show you have acted on. Want and Maybe are saved options. Not a Fit is hidden from Discover unless you turn it back on. V36 keeps your trained model and attempts to restore old saved actions from prior local folders.</div>', unsafe_allow_html=True)
-    playlist = load_playlist_preferences(user.get("user_id", "unknown_user"))
+    playlist = load_playlist_preferences(user.get("user_id", "unknown_user")) if use_saved_history_toggle else pd.DataFrame()
 
-    if playlist.empty:
+    if not use_saved_history_toggle:
+        st.info("Saved history is OFF for this test run. Turn it back on in Testing controls to view My Playlist.")
+    elif playlist.empty:
         st.info("No saved playlist rows are showing yet. Your trained model is still active, but saved Want/Maybe UI rows may need a database restore. Use Want, Maybe, or Not a Fit on Discover to rebuild this list.")
     else:
         want_count = int((playlist["action"] == "want_to_go").sum())
