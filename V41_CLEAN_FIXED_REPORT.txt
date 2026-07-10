@@ -1,0 +1,7 @@
+Encore AI V41 Final Demo Clean Fixed
+source=V40 stable final folder or zip
+kept=V40 look, data folder, models folder, .env, saved playlist, Spotify buttons, Copilot, Plan a Night
+changed=removed Discover Sort dropdown
+ranking=Saved Want first, Saved Maybe second, then Match Score descending
+fixed=missing _cc_match_score_label helper if absent
+backup=/Users/andrewwhite/Downloads/spotify_concert_intelligence_v41_final_demo/app.py.BACKUP_BEFORE_V41_CLEAN_FIXED_20260702_033645

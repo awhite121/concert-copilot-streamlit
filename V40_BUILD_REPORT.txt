@@ -1,0 +1,14 @@
+Encore AI V40 Stable Final
+
+Base: V37 app flow because it kept the UI, My Playlist, training, model history, and old recommendation pipeline working.
+Upgrades added:
+- Discover filters in one row: Search, Sort, City, Venue, Genre, Hidden.
+- Sort options: Recommended, Saved first, Match score, Soonest.
+- No Load 40 More. Full filtered list is shown.
+- Match Score badge on every Discover and Playlist card.
+- Spotify Listen/Search fallback on every card.
+- External event APIs do not receive comma-separated taste prompts, preventing 0-result searches.
+- Copilot Plan a Night uses real date/time, structured timeline, nearby places, backup, verify steps, and fuller markdown.
+- Training and Behind the Scenes tabs remain from V37.
+
+Run: streamlit run app.py --server.port 8540

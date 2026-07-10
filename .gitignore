@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.env
+venv/
+.testvenv/
+.spotify_cache*
+data/chroma/
+data/*.sqlite
+data/*.csv
+models/*.joblib
+models/history/
+.DS_Store
+.venv/
+.streamlit/secrets.toml
