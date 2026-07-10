@@ -628,7 +628,7 @@ def _cc_limit_visible_events(events, key="discover", page_size=40):
         st.session_state[limit_key] = page_size
     limit = int(st.session_state.get(limit_key, page_size))
     limit = max(page_size, min(limit, total))
-    st.caption(f"Showing {limit} of {total} results. Search and filters still apply to the full loaded list.")
+    st.caption(f"Showing {limit} of {total} results.")
     if limit < total:
         if st.button(f"Load {min(page_size, total - limit)} more", key=f"{key}_load_more_btn"):
             st.session_state[limit_key] = min(total, limit + page_size)
@@ -1282,7 +1282,6 @@ def render_event_card(event: Dict[str, Any], idx: int, section: str, user, sessi
                   <span class="signal-pill"><span class="signal-dot dot-coral"></span>{escape(str(confidence))}</span>
                   {group_html}
                   <span class="signal-pill no-dot">{escape(str(lane))}</span>
-                  <span class="signal-pill"><span class="signal-dot {price_dot}"></span>{escape(str(price_text))}</span>
                   {spotify_pill}
                 </div>
                 <div class="why-note">
@@ -1304,8 +1303,7 @@ def render_event_card(event: Dict[str, Any], idx: int, section: str, user, sessi
             action_cols = st.columns([1.0, 0.07, 1.0, 0.75, 1.0, 2.2], vertical_alignment="center")
             with action_cols[0]:
                 if links:
-                    ticket_label = "Tickets / live price →" if price_text == "Price not listed" else "Tickets →"
-                    st.link_button(ticket_label, links[0], type="primary", use_container_width=True)
+                    st.link_button("Tickets →", links[0], type="primary", use_container_width=True)
                 else:
                     st.button("Tickets →", key=f"tickets_disabled_{section}_{session_id}_{event.get('event_id')}_{idx}", disabled=True, use_container_width=True)
                 try:
@@ -1724,7 +1722,6 @@ with main_tabs[0]:
         caption = f"Clean test: showing {len(visible)} of {len(base_events)} loaded shows. Saved history is ignored; current ranking score only."
 
     visible = _dedupe_events_for_display(visible)
-    st.caption(caption)
     visible = _cc_limit_visible_events(visible, key=f"discover_{session_id}", page_size=display_page_size)
 
     if not visible:
@@ -1793,8 +1790,6 @@ with main_tabs[1]:
         elif "created_at" in filtered_playlist.columns:
             filtered_playlist = filtered_playlist.sort_values("created_at", ascending=False)
 
-        st.markdown('<div class="copilot-note"><b>Product logic:</b> Want/Maybe stay visible on Discover and collect here. Don\'t Go is hidden from Discover by default but can be reviewed or restored here.</div>', unsafe_allow_html=True)
-
         if filtered_playlist.empty:
             st.info("No shows match those filters.")
         for index, row in enumerate(filtered_playlist.to_dict(orient="records"), 1):
@@ -1823,8 +1818,7 @@ with main_tabs[1]:
                         <div class="shortlist-meta"><b>{when_line}</b> · {venue_line}</div>
                         <span class="badge badge-price">{escape(_cc_match_score_label(event))}</span>
                         <span class="badge {status_class}">{status_label}</span>
-                        <span class="badge {price_class}">{escape(str(price_text))}</span>
-                        <span class="badge">{escape(str(event.get('winning_genre_cluster_label') or event.get('genre') or 'Music'))}</span>
+                        <span class="badge">{escape(str(_cc_display_lane(event)))}</span>
                         <div class="shortlist-reason">{reason}</div>
                     </div>""",
                     unsafe_allow_html=True,
@@ -1867,21 +1861,17 @@ with main_tabs[1]:
 # ---------------- Copilot ----------------
 with main_tabs[2]:
     st.markdown('<div class="section-head">Copilot</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-sub">Ask for the best shows or instantly turn one concert into a full night out. Fast mode answers from the ranked event context instantly; Full AI adds place enrichment and a longer generated report.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-sub">Ask for the best shows or turn one concert into a simple night-out plan.</div>', unsafe_allow_html=True)
 
     copilot_speed_mode = st.radio(
-        "Copilot speed",
-        ["Fast answer", "Full AI report"],
+        "Copilot mode",
+        ["Quick answer", "Detailed answer"],
         horizontal=True,
         index=0,
-        help="Fast answer skips slow place/weather enrichment and the long narrative LLM call. Full AI is slower but richer.",
+        help="Quick answer is best for a live demo. Detailed answer adds more planning context.",
         key="copilot_speed_mode_v1",
     )
-    copilot_fast_mode = copilot_speed_mode == "Fast answer"
-    if copilot_fast_mode:
-        st.caption("Fast mode: instant deterministic picks from your ranked shows. No slow places/weather scan unless you plan a specific night.")
-    else:
-        st.caption("Full AI mode: enriches top events with place context and generates a longer Copilot report.")
+    copilot_fast_mode = copilot_speed_mode == "Quick answer"
 
     _saved_events = active_playlist_events if 'active_playlist_events' in globals() else []
     _playlist_events = playlist_memory_events if 'playlist_memory_events' in globals() else []
@@ -2233,7 +2223,7 @@ with main_tabs[2]:
         b1, b2 = st.columns([1, 1])
         with b1:
             if st.button('Plan this night', key=f"auto_plan_{button_key_suffix}_{label}_{event.get('event_id') or title}", use_container_width=True):
-                with st.spinner('Building fast plan...'):
+                with st.spinner('Building your plan...'):
                     _auto_plan(event, source='Copilot picks')
                 st.success('Night planned below. You can also open Plan a Night to edit it.')
         with b2:
@@ -2334,13 +2324,13 @@ with main_tabs[2]:
         else:
             base_events = _all_memory_events
         city_events = _filter_city(base_events, selected_city)
-        st.caption(f"Using {len(city_events)} shows after city/source filtering. Fast mode uses model scores, dates, venues, prices when returned, and taste signals without slow place/weather scans.")
+        st.caption(f"Using {len(city_events)} shows after city/source filtering.")
 
         if st.button('Find my best shows', type='primary', use_container_width=True, key='find_simple_copilot'):
             if not city_events:
                 st.warning('No shows match that city/source yet. Run a search for that city or switch source to Both/Current search.')
             else:
-                with st.spinner('Finding your best options...' if copilot_fast_mode else 'Building full AI report with places and rankings...'):
+                with st.spinner('Finding your best options...' if copilot_fast_mode else 'Building your detailed answer...'):
                     try:
                         filtered_events, requested_window = _filter_by_request_window(city_events, user_question)
                     except Exception:
@@ -2404,8 +2394,6 @@ with main_tabs[2]:
                 st.markdown('---')
                 _render_plan(st.session_state.get('simple_night_plan'))
             narrative = result.get('narrative')
-            if not narrative:
-                st.caption("Fast Copilot answer: picks are generated from the ranked event context without waiting on the long AI report.")
             if narrative:
                 try:
                     render_llm_result(narrative, fallback_title='Copilot recommendation')
