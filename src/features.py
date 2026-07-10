@@ -70,10 +70,29 @@ def _track_artist_lookup(top_tracks: List[Dict[str, Any]]) -> Dict[str, List[Dic
     return lookup
 
 
+def _compact_artist_name(value: Any) -> str:
+    return "".join(ch.lower() for ch in str(value or "") if ch.isalnum())
+
+
+def _artist_name_matches(artist_name: str, event_text: str) -> bool:
+    artist_key = _compact_artist_name(artist_name)
+    event_key = _compact_artist_name(event_text)
+    if not artist_key or len(artist_key) < 4 or not event_key:
+        return False
+    return artist_key in event_key
+
+
 def exact_artist_match_features(top_artists, top_tracks, event):
     artist_lookup = _artist_lookup(top_artists)
     track_lookup = _track_artist_lookup(top_tracks)
     event_artists = [artist for artist in event.get("artists", []) or [] if artist]
+
+    event_text = " ".join([
+        str(event.get("event_name") or ""),
+        str(event.get("title") or ""),
+        str(event.get("name") or ""),
+        " ".join(str(a) for a in event_artists),
+    ])
 
     direct_matches: List[str] = []
     track_artist_matches: List[str] = []
@@ -82,22 +101,41 @@ def exact_artist_match_features(top_artists, top_tracks, event):
     track_affinity_score = 0.0
     artist_blend_score = 0.0
 
+    def add_direct_match(display_name, artist_obj):
+        nonlocal direct_artist_rank_score, spotify_durability_score, artist_blend_score
+        if display_name and display_name not in direct_matches:
+            direct_matches.append(display_name)
+        rank = max(1, int(artist_obj.get("rank") or 50))
+        direct_artist_rank_score = max(direct_artist_rank_score, max(0.0, 115.0 - rank * 2.4))
+        time_ranges = set(artist_obj.get("time_ranges") or [])
+        spotify_durability_score = max(spotify_durability_score, len(time_ranges) / 3.0 * 100.0)
+        artist_blend_score = max(artist_blend_score, float(artist_obj.get("blend_score") or 0.0))
+
     for event_artist in event_artists:
-        key = event_artist.lower()
+        key = str(event_artist or "").lower()
         artist = artist_lookup.get(key)
         if artist:
-            direct_matches.append(artist.get("artist") or event_artist)
-            rank = max(1, int(artist.get("rank") or 50))
-            direct_artist_rank_score = max(direct_artist_rank_score, max(0.0, 105.0 - rank * 3.0))
-            time_ranges = set(artist.get("time_ranges") or [])
-            spotify_durability_score = max(spotify_durability_score, len(time_ranges) / 3.0 * 100.0)
-            artist_blend_score = max(artist_blend_score, float(artist.get("blend_score") or 0.0))
+            add_direct_match(artist.get("artist") or event_artist, artist)
 
         tracks = track_lookup.get(key, [])
         if tracks:
-            track_artist_matches.append(event_artist)
+            if event_artist not in track_artist_matches:
+                track_artist_matches.append(event_artist)
             best_rank = min(max(1, int(track.get("rank") or 50)) for track in tracks)
-            track_affinity_score = max(track_affinity_score, max(0.0, 105.0 - best_rank * 2.5))
+            track_affinity_score = max(track_affinity_score, max(0.0, 110.0 - best_rank * 2.0))
+
+    for artist in top_artists:
+        name = artist.get("artist")
+        if name and name not in direct_matches and _artist_name_matches(name, event_text):
+            add_direct_match(name, artist)
+
+    for artist_name, tracks in track_lookup.items():
+        if artist_name and _artist_name_matches(artist_name, event_text):
+            display = tracks[0].get("artist") or artist_name
+            if display not in track_artist_matches:
+                track_artist_matches.append(display)
+            best_rank = min(max(1, int(track.get("rank") or 50)) for track in tracks)
+            track_affinity_score = max(track_affinity_score, max(0.0, 110.0 - best_rank * 2.0))
 
     all_matches: List[str] = []
     for name in direct_matches + track_artist_matches:
@@ -105,9 +143,9 @@ def exact_artist_match_features(top_artists, top_tracks, event):
             all_matches.append(name)
 
     exact_artist_score = (
-        direct_artist_rank_score * 0.65
-        + track_affinity_score * 0.20
-        + spotify_durability_score * 0.15
+        direct_artist_rank_score * 0.70
+        + track_affinity_score * 0.18
+        + spotify_durability_score * 0.12
     )
     return {
         "exact_artist_score": min(exact_artist_score, 100.0),

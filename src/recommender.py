@@ -132,69 +132,87 @@ def build_reason_details(event, features, top_tracks):
 
 
 def _score_with_mode(feature_df: pd.DataFrame, recommendation_mode: str) -> pd.Series:
-    """Cold-start score by product-facing recommendation style."""
-    cluster_gate = (0.25 + 0.75 * (feature_df["genre_cluster_score"].clip(0, 100) / 100.0))
+    cluster_gate = (0.20 + 0.80 * (feature_df["genre_cluster_score"].clip(0, 100) / 100.0))
     direct_gate = feature_df["has_direct_artist_match"].clip(0, 1)
     effective_embedding = feature_df["embedding_rank_score"] * cluster_gate
     effective_embedding = effective_embedding.where(direct_gate == 0, feature_df["embedding_rank_score"])
 
+    direct_boost = direct_gate * 22.0
+    top_artist_boost = (feature_df["direct_artist_rank_score"].clip(0, 100) / 100.0) * 14.0
+    track_boost = (feature_df["track_affinity_score"].clip(0, 100) / 100.0) * 9.0
+    durability_boost = (feature_df["spotify_durability_score"].clip(0, 100) / 100.0) * 5.0
+    strong_cluster_boost = ((feature_df["genre_cluster_score"].clip(0, 100) >= 45) & (direct_gate == 0)).astype(float) * 5.0
+    weak_fit_penalty = ((direct_gate == 0) & (feature_df["genre_cluster_score"].clip(0, 100) < 12) & (feature_df["embedding_rank_score"].clip(0, 100) < 65)).astype(float) * 12.0
+
     mode = (recommendation_mode or "Best overall").lower()
 
     if "familiar" in mode:
-        return (
-            0.43 * feature_df["exact_norm"]
-            + 0.15 * feature_df["cluster_norm"]
-            + 0.11 * effective_embedding
-            + 0.10 * feature_df["durability_norm"]
-            + 0.08 * feature_df["track_norm"]
-            + 0.05 * feature_df["venue_quality_signal"].clip(0, 100)
-            + 0.04 * feature_df["price_norm"]
-            + 0.03 * feature_df["days_norm"]
-            + 0.01 * feature_df["source_count_score"]
-            - (1.0 - direct_gate) * 6.0
-        ).clip(lower=0)
+        score = (
+            0.50 * feature_df["exact_norm"]
+            + 0.14 * feature_df["cluster_norm"]
+            + 0.09 * effective_embedding
+            + 0.08 * feature_df["durability_norm"]
+            + 0.07 * feature_df["track_norm"]
+            + 0.04 * feature_df["venue_quality_signal"].clip(0, 100)
+            + 0.03 * feature_df["price_norm"]
+            + 0.02 * feature_df["days_norm"]
+            + direct_boost + top_artist_boost + track_boost + durability_boost
+            - (1.0 - direct_gate) * 8.0
+            - weak_fit_penalty
+        )
+        return score.clip(lower=0)
 
     if "up" in mode:
-        # Emerging but not random: needs taste fit + quality signals.
-        return (
-            0.08 * feature_df["exact_norm"]
+        score = (
+            0.10 * feature_df["exact_norm"]
             + 0.28 * feature_df["cluster_norm"]
-            + 0.22 * effective_embedding
-            + 0.20 * feature_df["discovery_quality_score"].clip(0, 100)
-            + 0.08 * feature_df["venue_quality_signal"].clip(0, 100)
+            + 0.20 * effective_embedding
+            + 0.18 * feature_df["discovery_quality_score"].clip(0, 100)
+            + 0.07 * feature_df["venue_quality_signal"].clip(0, 100)
             + 0.05 * feature_df["source_count_score"]
-            + 0.04 * feature_df["price_norm"]
-            + 0.03 * feature_df["days_norm"]
+            + 0.03 * feature_df["price_norm"]
+            + 0.02 * feature_df["days_norm"]
             + 0.02 * feature_df["weekend_event"] * 100
-            - direct_gate * 4.0
-        ).clip(lower=0)
+            + 0.35 * direct_boost
+            + 0.30 * top_artist_boost
+            + strong_cluster_boost
+            - weak_fit_penalty * 0.75
+        )
+        return score.clip(lower=0)
 
     if "discover" in mode or "fresh" in mode:
-        return (
-            0.12 * feature_df["exact_norm"]
+        score = (
+            0.16 * feature_df["exact_norm"]
             + 0.31 * feature_df["cluster_norm"]
-            + 0.25 * effective_embedding
-            + 0.12 * feature_df["discovery_quality_score"].clip(0, 100)
-            + 0.07 * feature_df["novelty_score"]
-            + 0.05 * feature_df["venue_quality_signal"].clip(0, 100)
-            + 0.04 * feature_df["price_norm"]
-            + 0.03 * feature_df["days_norm"]
+            + 0.22 * effective_embedding
+            + 0.10 * feature_df["discovery_quality_score"].clip(0, 100)
+            + 0.06 * feature_df["novelty_score"]
+            + 0.04 * feature_df["venue_quality_signal"].clip(0, 100)
+            + 0.03 * feature_df["price_norm"]
+            + 0.02 * feature_df["days_norm"]
             + 0.01 * feature_df["weekend_event"] * 100
-        ).clip(lower=0)
+            + 0.45 * direct_boost
+            + 0.40 * top_artist_boost
+            + strong_cluster_boost
+            - weak_fit_penalty * 0.75
+        )
+        return score.clip(lower=0)
 
-    # Best overall: balanced, reliable, and explainable.
-    return (
-        0.29 * feature_df["exact_norm"]
-        + 0.25 * feature_df["cluster_norm"]
-        + 0.18 * effective_embedding
+    score = (
+        0.42 * feature_df["exact_norm"]
+        + 0.22 * feature_df["cluster_norm"]
+        + 0.13 * effective_embedding
         + 0.06 * feature_df["durability_norm"]
-        + 0.06 * feature_df["track_norm"]
-        + 0.05 * feature_df["discovery_quality_score"].clip(0, 100)
-        + 0.04 * feature_df["venue_quality_signal"].clip(0, 100)
-        + 0.04 * feature_df["price_norm"]
-        + 0.02 * feature_df["days_norm"]
+        + 0.05 * feature_df["track_norm"]
+        + 0.04 * feature_df["discovery_quality_score"].clip(0, 100)
+        + 0.03 * feature_df["venue_quality_signal"].clip(0, 100)
+        + 0.025 * feature_df["price_norm"]
+        + 0.015 * feature_df["days_norm"]
         + 0.01 * feature_df["weekend_event"] * 100
-    ).clip(lower=0)
+        + direct_boost + top_artist_boost + track_boost + durability_boost + strong_cluster_boost
+        - weak_fit_penalty
+    )
+    return score.clip(lower=0)
 
 
 def rank_events_v6(
@@ -257,11 +275,17 @@ def rank_events_v6(
         score_source = "spotify_genre_cluster_baseline"
         model_weight = 0.0
 
-    model_weight = max(0.0, min(float(model_weight or 0.0), 0.45))
+    model_weight = max(0.0, min(float(model_weight or 0.0), 0.30))
     ranked = []
     for event, feature_row, model_score in zip(events, feature_rows, model_scores):
         base_score = float(feature_row["hybrid_score"])
         final_score = (1.0 - model_weight) * base_score + model_weight * float(model_score) if has_model else base_score
+
+        if int(feature_row.get("has_direct_artist_match") or 0) == 1:
+            final_score += 10.0
+        elif float(feature_row.get("genre_cluster_score") or 0) < 12 and float(feature_row.get("embedding_rank_score") or 0) < 60:
+            final_score -= 8.0
+
         reason = build_reason_details(event, feature_row, top_tracks)
         ranked.append({
             **event,
