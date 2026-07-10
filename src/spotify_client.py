@@ -1,20 +1,72 @@
 from typing import List, Dict, Any, Optional
+
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+
 from .config import get_secret
 
 SCOPE = "user-top-read"
 
+
+def _safe_cache_key(cache_key: str = "default") -> str:
+    return "".join(ch for ch in str(cache_key or "default") if ch.isalnum() or ch in ["_", "-"])[:80] or "default"
+
+
+def _get_query_param(name: str):
+    """Read Streamlit query params across old/new Streamlit versions."""
+    try:
+        import streamlit as st
+        value = st.query_params.get(name)
+    except Exception:
+        try:
+            import streamlit as st
+            params = st.experimental_get_query_params()
+            value = params.get(name)
+        except Exception:
+            value = None
+
+    if isinstance(value, list):
+        return value[0] if value else None
+    return value
+
+
+def _clear_spotify_query_params():
+    """Remove OAuth code/state from the URL after token exchange."""
+    try:
+        import streamlit as st
+        st.query_params.clear()
+    except Exception:
+        try:
+            import streamlit as st
+            st.experimental_set_query_params()
+        except Exception:
+            pass
+
+
+def _render_connect_button(auth_url: str, redirect_uri: str):
+    """Render an explicit Spotify login CTA for Streamlit Cloud."""
+    try:
+        import streamlit as st
+        st.warning("Spotify is not connected yet.")
+        st.link_button("Connect Spotify", auth_url, type="primary")
+        st.caption("After Spotify redirects back, click Get recommendations again.")
+        st.caption(f"Redirect URI being used: {redirect_uri}")
+        st.stop()
+    except Exception:
+        return None
+
+
 def get_spotify_client(cache_key: str = "default") -> Optional[spotipy.Spotify]:
     client_id = get_secret("SPOTIFY_CLIENT_ID")
     client_secret = get_secret("SPOTIFY_CLIENT_SECRET")
-    redirect_uri = get_secret("SPOTIFY_REDIRECT_URI", "http://localhost:8501")
+    redirect_uri = get_secret("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback")
 
     if not client_id or not client_secret:
         return None
 
-    safe_key = "".join(ch for ch in cache_key if ch.isalnum() or ch in ["_", "-"])[:80]
+    safe_key = _safe_cache_key(cache_key)
     cache_path = f".spotify_cache_{safe_key}"
+    session_key = f"spotify_token_info_{safe_key}"
 
     auth_manager = SpotifyOAuth(
         client_id=client_id,
@@ -23,8 +75,77 @@ def get_spotify_client(cache_key: str = "default") -> Optional[spotipy.Spotify]:
         scope=SCOPE,
         cache_path=cache_path,
         show_dialog=False,
+        open_browser=False,
     )
-    return spotipy.Spotify(auth_manager=auth_manager)
+
+    # 1) Streamlit session token. This is the Cloud-friendly path.
+    try:
+        import streamlit as st
+        token_info = st.session_state.get(session_key)
+        if token_info:
+            try:
+                if auth_manager.is_token_expired(token_info) and token_info.get("refresh_token"):
+                    token_info = auth_manager.refresh_access_token(token_info["refresh_token"])
+                    st.session_state[session_key] = token_info
+            except Exception:
+                pass
+
+            access_token = token_info.get("access_token")
+            if access_token:
+                return spotipy.Spotify(auth=access_token)
+    except Exception:
+        pass
+
+    # 2) OAuth callback code from Spotify redirect.
+    code = _get_query_param("code")
+    if code:
+        try:
+            try:
+                token_info = auth_manager.get_access_token(code, as_dict=True, check_cache=False)
+            except TypeError:
+                token_info = auth_manager.get_access_token(code, as_dict=True)
+
+            try:
+                import streamlit as st
+                st.session_state[session_key] = token_info
+            except Exception:
+                pass
+
+            _clear_spotify_query_params()
+
+            access_token = token_info.get("access_token")
+            if access_token:
+                return spotipy.Spotify(auth=access_token)
+
+        except Exception as exc:
+            try:
+                import streamlit as st
+                st.error(f"Spotify login failed: {exc}")
+                st.stop()
+            except Exception:
+                return None
+
+    # 3) Local cached token, useful when running on your Mac.
+    try:
+        token_info = auth_manager.get_cached_token()
+        if token_info:
+            try:
+                if auth_manager.is_token_expired(token_info) and token_info.get("refresh_token"):
+                    token_info = auth_manager.refresh_access_token(token_info["refresh_token"])
+            except Exception:
+                pass
+
+            access_token = token_info.get("access_token")
+            if access_token:
+                return spotipy.Spotify(auth=access_token)
+    except Exception:
+        pass
+
+    # 4) No token yet. Show a clear Spotify button instead of hanging.
+    auth_url = auth_manager.get_authorize_url()
+    _render_connect_button(auth_url, redirect_uri)
+    return None
+
 
 def get_current_user(sp: spotipy.Spotify) -> Dict[str, Any]:
     user = sp.current_user()
@@ -33,6 +154,7 @@ def get_current_user(sp: spotipy.Spotify) -> Dict[str, Any]:
         "display_name": user.get("display_name") or user.get("id") or "Spotify User",
         "spotify_url": user.get("external_urls", {}).get("spotify"),
     }
+
 
 def get_top_artists(sp: spotipy.Spotify, limit: int = 30, time_range: str = "medium_term") -> List[Dict[str, Any]]:
     results = sp.current_user_top_artists(limit=limit, time_range=time_range)
@@ -48,6 +170,7 @@ def get_top_artists(sp: spotipy.Spotify, limit: int = 30, time_range: str = "med
             "image_url": item.get("images", [{}])[0].get("url") if item.get("images") else None,
         })
     return artists
+
 
 def get_top_tracks(sp: spotipy.Spotify, limit: int = 30, time_range: str = "medium_term") -> List[Dict[str, Any]]:
     results = sp.current_user_top_tracks(limit=limit, time_range=time_range)
@@ -65,10 +188,10 @@ def get_top_tracks(sp: spotipy.Spotify, limit: int = 30, time_range: str = "medi
         })
     return tracks
 
+
 def demo_profile():
     """
     Lets recruiters test the app without logging into Spotify.
-    Swap this to match your actual music taste before publishing.
     """
     user = {
         "user_id": "demo_user",

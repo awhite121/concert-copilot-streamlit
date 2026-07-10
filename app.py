@@ -1282,7 +1282,7 @@ if run:
         elif profile_mode == "Spotify login":
             spotify = get_spotify_client(cache_key=st.session_state.browser_session_id)
             if spotify is None:
-                st.error("Spotify credentials are missing from .env.")
+                st.error("Spotify is not connected or Streamlit secrets are missing. Use the Connect Spotify button or check SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET / SPOTIFY_REDIRECT_URI.")
                 st.stop()
             user = get_current_user(spotify)
             primary_top_artists, top_tracks = get_blended_taste_profile(spotify, artist_limit=50, track_limit=50)
