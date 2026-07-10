@@ -1867,7 +1867,21 @@ with main_tabs[1]:
 # ---------------- Copilot ----------------
 with main_tabs[2]:
     st.markdown('<div class="section-head">Copilot</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-sub">Ask for the best shows or instantly turn one concert into a full night out. The UI stays simple; the backend still uses Spotify taste, saved feedback, model scores, city/date filters, venue metadata, places, ratings, and prices when available.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-sub">Ask for the best shows or instantly turn one concert into a full night out. Fast mode answers from the ranked event context instantly; Full AI adds place enrichment and a longer generated report.</div>', unsafe_allow_html=True)
+
+    copilot_speed_mode = st.radio(
+        "Copilot speed",
+        ["Fast answer", "Full AI report"],
+        horizontal=True,
+        index=0,
+        help="Fast answer skips slow place/weather enrichment and the long narrative LLM call. Full AI is slower but richer.",
+        key="copilot_speed_mode_v1",
+    )
+    copilot_fast_mode = copilot_speed_mode == "Fast answer"
+    if copilot_fast_mode:
+        st.caption("Fast mode: instant deterministic picks from your ranked shows. No slow places/weather scan unless you plan a specific night.")
+    else:
+        st.caption("Full AI mode: enriches top events with place context and generates a longer Copilot report.")
 
     _saved_events = active_playlist_events if 'active_playlist_events' in globals() else []
     _playlist_events = playlist_memory_events if 'playlist_memory_events' in globals() else []
@@ -2189,7 +2203,7 @@ with main_tabs[2]:
     def _auto_plan(event, style='date night', notes='Keep it easy. Good food or drinks nearby, no rushing, and a backup option.', source='Copilot picks'):
         event = _set_plan_event(event, source=source)
         structured = _call_structured_plan(event, style, notes)
-        llm_plan = _call_llm_plan(event, style, notes)
+        llm_plan = None if copilot_fast_mode else _call_llm_plan(event, style, notes)
         if not _timeline_has_content(structured):
             structured = _fallback_structured_plan(event, structured)
         st.session_state.simple_night_plan = {'event': event, 'structured': structured, 'llm': llm_plan, 'style': style, 'notes': notes}
@@ -2219,7 +2233,7 @@ with main_tabs[2]:
         b1, b2 = st.columns([1, 1])
         with b1:
             if st.button('Plan this night', key=f"auto_plan_{button_key_suffix}_{label}_{event.get('event_id') or title}", use_container_width=True):
-                with st.spinner('Planning the night now...'):
+                with st.spinner('Building fast plan...'):
                     _auto_plan(event, source='Copilot picks')
                 st.success('Night planned below. You can also open Plan a Night to edit it.')
         with b2:
@@ -2320,30 +2334,33 @@ with main_tabs[2]:
         else:
             base_events = _all_memory_events
         city_events = _filter_city(base_events, selected_city)
-        st.caption(f"Using {len(city_events)} shows after city/source filtering. Backend automatically uses model scores, saved feedback, dates, venue/place context, prices when returned, and taste signals.")
+        st.caption(f"Using {len(city_events)} shows after city/source filtering. Fast mode uses model scores, dates, venues, prices when returned, and taste signals without slow place/weather scans.")
 
         if st.button('Find my best shows', type='primary', use_container_width=True, key='find_simple_copilot'):
             if not city_events:
                 st.warning('No shows match that city/source yet. Run a search for that city or switch source to Both/Current search.')
             else:
-                with st.spinner('Ranking the best options with your model, playlist memory, city/date filters, places, ratings, and prices when returned...'):
+                with st.spinner('Finding your best options...' if copilot_fast_mode else 'Building full AI report with places and rankings...'):
                     try:
                         filtered_events, requested_window = _filter_by_request_window(city_events, user_question)
                     except Exception:
                         filtered_events, requested_window = city_events, None
                     candidate_events = filtered_events if requested_window and filtered_events else city_events
-                    candidate_events = [_hydrate_event(e) for e in candidate_events[:100]]
+                    # Speed: Copilot only needs the best candidates, not the whole event pool.
+                    candidate_limit = 35 if copilot_fast_mode else 80
+                    enrich_top_n = 0 if copilot_fast_mode else min(8, len(candidate_events))
+                    candidate_events = [_hydrate_event(e) for e in candidate_events[:candidate_limit]]
                     try:
                         contexts = enrich_candidate_context(
                             candidate_events,
                             vibe='auto',
                             radius_miles=1.1,
-                            enrich_top_n=min(30, len(candidate_events)),
-                            use_places=True,
-                            use_weather=True,
+                            enrich_top_n=enrich_top_n,
+                            use_places=not copilot_fast_mode,
+                            use_weather=False,
                         )
                     except Exception:
-                        contexts = [{'event': e, 'event_id': e.get('event_id'), 'copilot_scores': {'overall': e.get('final_score', 0), 'request_match': e.get('final_score', 0)}} for e in candidate_events[:30]]
+                        contexts = [{'event': e, 'event_id': e.get('event_id'), 'copilot_scores': {'overall': e.get('final_score', 0), 'request_match': e.get('final_score', 0)}} for e in candidate_events[:candidate_limit]]
                     # Hydrate context events again after enrichment so card dates/times come from the full recommendation row.
                     for ctx in contexts:
                         if isinstance(ctx, dict):
@@ -2357,10 +2374,13 @@ with main_tabs[2]:
                     for lab, ctx in list((picks or {}).items()):
                         if isinstance(ctx, dict):
                             ctx['event'] = _hydrate_event(ctx.get('event') or ctx)
-                    try:
-                        narrative = generate_elite_copilot_report(user_question, contexts, picks, top_artists, top_tracks, situation='auto', budget=None)
-                    except Exception:
+                    if copilot_fast_mode:
                         narrative = None
+                    else:
+                        try:
+                            narrative = generate_elite_copilot_report(user_question, contexts, picks, top_artists, top_tracks, situation='auto', budget=None)
+                        except Exception:
+                            narrative = None
                     st.session_state.simple_copilot_result = {'city': selected_city, 'source': source_choice, 'question': user_question, 'requested_window': requested_window, 'picks': picks, 'narrative': narrative}
 
         result = st.session_state.get('simple_copilot_result')
@@ -2384,6 +2404,8 @@ with main_tabs[2]:
                 st.markdown('---')
                 _render_plan(st.session_state.get('simple_night_plan'))
             narrative = result.get('narrative')
+            if not narrative:
+                st.caption("Fast Copilot answer: picks are generated from the ranked event context without waiting on the long AI report.")
             if narrative:
                 try:
                     render_llm_result(narrative, fallback_title='Copilot recommendation')
@@ -2408,11 +2430,12 @@ with main_tabs[2]:
         if not plan_pool:
             st.info('No concerts available in this source yet. Run a search, save shows, or use Ask Copilot first.')
         else:
-            options = [f"{i+1}. {_event_title(e)} — {_pretty_when(e)} — {_event_city(e)}" for i, e in enumerate(plan_pool[:100])]
+            plan_option_limit = 50 if copilot_fast_mode else 100
+            options = [f"{i+1}. {_event_title(e)} — {_pretty_when(e)} — {_event_city(e)}" for i, e in enumerate(plan_pool[:plan_option_limit])]
             default_index = 0
             remembered_id = st.session_state.get('plan_event_id')
             if remembered_id:
-                for i, e in enumerate(plan_pool[:100]):
+                for i, e in enumerate(plan_pool[:plan_option_limit]):
                     if str(e.get('event_id')) == str(remembered_id):
                         default_index = i
                         break

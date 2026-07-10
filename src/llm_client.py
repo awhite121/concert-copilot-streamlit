@@ -19,6 +19,20 @@ class LLMResult:
 def get_openai_model() -> str:
     return get_secret("OPENAI_MODEL", "gpt-5.4-mini")
 
+
+def get_llm_max_output_tokens() -> int:
+    try:
+        return int(get_secret("OPENAI_MAX_OUTPUT_TOKENS", "450"))
+    except Exception:
+        return 450
+
+
+def get_llm_timeout_seconds() -> float:
+    try:
+        return float(get_secret("OPENAI_TIMEOUT_SECONDS", "18"))
+    except Exception:
+        return 18.0
+
 def _fallback_response(task: str, context: Dict[str, Any]) -> str:
     if task == "taste_summary":
         artists = ", ".join(context.get("top_artist_names", [])[:8])
@@ -81,13 +95,14 @@ def generate_llm_response(task: str, system_prompt: str, user_prompt: str, conte
         )
     try:
         from openai import OpenAI
-        client = OpenAI(api_key=api_key)
+        client = OpenAI(api_key=api_key, timeout=get_llm_timeout_seconds())
         response = client.responses.create(
             model=model,
             input=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
+            max_output_tokens=get_llm_max_output_tokens(),
         )
         text = getattr(response, "output_text", None) or str(response)
         usage = getattr(response, "usage", None)
