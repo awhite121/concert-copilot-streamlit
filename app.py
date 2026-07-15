@@ -1042,6 +1042,15 @@ div[data-testid="stVerticalBlockBorderWrapper"]:hover{
   .top-pick-card{min-height:250px}
 }
 
+
+.filter-panel-title{
+  margin:1rem 0 .45rem;
+  color:#252b38;
+  font-size:.82rem;
+  font-weight:900;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -1523,6 +1532,7 @@ def reason_tags_html(event):
     return "".join([f'<span class="clean-tag">{tag}</span>' for tag in tags[:5] if tag])
 
 
+
 def render_event_card(event: Dict[str, Any], idx: int, section: str, user, session_id, extra_badge=None):
     event = _cc_add_spotify_fields(dict(event or {}))
     title = event.get("event_name") or "Untitled event"
@@ -1555,33 +1565,37 @@ def render_event_card(event: Dict[str, Any], idx: int, section: str, user, sessi
                 st.markdown('<div class="poster-fallback">Event Poster</div>', unsafe_allow_html=True)
 
         with content_col:
-            st.markdown(
-                f'''<div class="card-topline">
-                      <span class="rank-chip">#{idx}</span>
-                      <span class="card-date">{escape(when)}</span>
-                    </div>
-                    <div class="card-title">{escape(str(title))}</div>
-                    <div class="card-venue">{escape(venue_line)}</div>''',
-                unsafe_allow_html=True,
+            header_html = (
+                '<div class="card-topline">'
+                f'<span class="rank-chip">#{idx}</span>'
+                f'<span class="card-date">{escape(when)}</span>'
+                '</div>'
+                f'<div class="card-title">{escape(str(title))}</div>'
+                f'<div class="card-venue">{escape(venue_line)}</div>'
             )
+            st.markdown(header_html, unsafe_allow_html=True)
 
-            group_html = (
-                f'<span class="signal-pill"><span class="signal-dot dot-blue"></span>{escape(str(extra_badge))}</span>'
-                if extra_badge else ""
+            signal_parts = [
+                f'<span class="signal-pill badge-price">{escape(_cc_match_score_label(event))}</span>',
+                f'<span class="signal-pill"><span class="signal-dot dot-coral"></span>{escape(str(confidence))}</span>',
+            ]
+            if extra_badge:
+                signal_parts.append(
+                    f'<span class="signal-pill"><span class="signal-dot dot-blue"></span>{escape(str(extra_badge))}</span>'
+                )
+            signal_parts.append(f'<span class="signal-pill no-dot">{escape(str(lane))}</span>')
+
+            recommendation_copy = str((why + " " + lane_copy).strip())
+            body_html = (
+                '<div class="signal-row">'
+                + "".join(signal_parts)
+                + '</div>'
+                '<div class="why-note">'
+                '<div class="why-label">Why it fits</div>'
+                f'<div class="why-copy">{escape(recommendation_copy)}</div>'
+                '</div>'
             )
-            st.markdown(
-                f'''<div class="signal-row">
-                      <span class="signal-pill badge-price">{escape(_cc_match_score_label(event))}</span>
-                      <span class="signal-pill"><span class="signal-dot dot-coral"></span>{escape(str(confidence))}</span>
-                      {group_html}
-                      <span class="signal-pill no-dot">{escape(str(lane))}</span>
-                    </div>
-                    <div class="why-note">
-                      <div class="why-label">Why it fits</div>
-                      <div class="why-copy">{escape(str((why + " " + lane_copy).strip()))}</div>
-                    </div>''',
-                unsafe_allow_html=True,
-            )
+            st.markdown(body_html, unsafe_allow_html=True)
 
             if ADMIN_MODE:
                 with st.popover("Feedback reasons"):
@@ -1593,6 +1607,7 @@ def render_event_card(event: Dict[str, Any], idx: int, section: str, user, sessi
                     )
 
             primary_actions = st.columns([1.05, 1.05, 1.25])
+
             with primary_actions[0]:
                 if links:
                     st.link_button("Tickets →", links[0], type="primary", use_container_width=True)
@@ -2047,10 +2062,15 @@ with main_tabs[0]:
     display_venue = "All venues"
     discover_genre = "All genres"
     show_hidden = False
-    with st.expander("Search & filters", expanded=False):
+    st.markdown('<div class="filter-panel-title">Search & filters</div>', unsafe_allow_html=True)
+    with st.container(border=True):
         f_search, f_city, f_venue, f_genre, f_hidden = st.columns([2.35, .95, 1.15, 1.05, .65], vertical_alignment="bottom")
         with f_search:
-            discover_search_text = st.text_input("Search artist, show, genre, venue", placeholder="Type an artist, venue, or genre", key="discover_search_text_v40")
+            discover_search_text = st.text_input(
+                "Search artist, show, genre, venue",
+                placeholder="Type an artist, venue, or genre",
+                key="discover_search_text_v40",
+            )
         with f_city:
             discover_city = st.selectbox("City", ["All cities"] + city_values_current, key="discover_city_filter_v40")
         with f_venue:
@@ -2058,7 +2078,12 @@ with main_tabs[0]:
         with f_genre:
             discover_genre = st.selectbox("Genre", genre_options, key="discover_genre_v40")
         with f_hidden:
-            show_hidden = st.checkbox("Hidden", value=False, help="Show events marked Not for me.", key="discover_hidden_v40")
+            show_hidden = st.checkbox(
+                "Hidden",
+                value=False,
+                help="Show events marked Not for me.",
+                key="discover_hidden_v40",
+            )
 
     visible = _cc_apply_discover_filters(
         base_events,
