@@ -60,6 +60,21 @@ from src.event_grouping import collapse_ranked_events
 from src.genre_clusters import build_user_taste_clusters, cluster_label
 
 
+# === PUBLIC PRODUCT MODE V1 ===
+def _secret_bool(name: str, default: bool = False) -> bool:
+    try:
+        value = st.secrets.get(name, default)
+    except Exception:
+        value = os.environ.get(name, default)
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+ADMIN_MODE = _secret_bool("ADMIN_MODE", False)
+PUBLIC_DEMO_MODE = _secret_bool("PUBLIC_DEMO_MODE", True) and not ADMIN_MODE
+
+
 # === HOTFIX V34: display dedupe + saved-memory helpers ===
 def _cc_clean_text(v):
     if v is None:
@@ -914,7 +929,17 @@ div[class*="st-key-no_"] button:hover {border-color:#f15a52!important;background
 .copilot-note {font-size:13px;color:#7a8295;margin:.35rem 0 .9rem;}
 
 @media (max-width: 900px) {.poster-wrap,.poster-fallback,.poster-wrap img{width:130px;height:130px;min-width:130px;max-width:130px;min-height:130px;max-height:130px}.card-title{font-size:1.35rem}.card-date{font-size:.92rem}.premium-shell{padding:.95rem}.signal-row{display:flex;flex-wrap:wrap}.spotify-pill{justify-self:start}}
-.mini-score{font-size:.76rem;color:#64748b;margin-top:.55rem;font-weight:700}.mini-card{border:1px solid rgba(15,23,42,.10);border-radius:14px;padding:14px;background:#fff;min-height:104px;box-shadow:0 8px 24px rgba(15,23,42,.04)}.mini-card span{color:#64748b;font-size:.85rem}</style>
+.mini-score{font-size:.76rem;color:#64748b;margin-top:.55rem;font-weight:700}.mini-card{border:1px solid rgba(15,23,42,.10);border-radius:14px;padding:14px;background:#fff;min-height:104px;box-shadow:0 8px 24px rgba(15,23,42,.04)}.mini-card span{color:#64748b;font-size:.85rem}
+/* Public product makeover */
+.product-profile {display:flex;align-items:center;justify-content:space-between;gap:18px;background:#fff;border:1px solid #e6e8ef;border-radius:22px;padding:14px 18px;margin:0 0 16px;box-shadow:0 12px 28px rgba(17,24,39,.05)}
+.profile-left {display:flex;align-items:center;gap:12px;min-width:0}.profile-avatar{width:48px;height:48px;border-radius:50%;object-fit:cover;border:2px solid #fff;box-shadow:0 0 0 2px #e7eaf1}.profile-fallback{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#ff6b63,#ff9b78);color:white;font-weight:900;font-size:18px}.profile-name{font-family:'Bricolage Grotesque',Inter,sans-serif;font-size:1.08rem;font-weight:850;color:var(--ink)}.profile-meta{font-size:.82rem;color:#727a8c;margin-top:2px}.profile-connected{display:inline-flex;align-items:center;gap:7px;background:#effaf4;border:1px solid #c5ead2;color:#20723f;border-radius:999px;padding:7px 11px;font-size:.78rem;font-weight:850;white-space:nowrap}
+.hero-feature-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:18px;position:relative;z-index:1}.hero-feature{background:#f8f9fc;border:1px solid #e9ebf2;border-radius:15px;padding:12px 14px}.hero-feature strong{display:block;color:#252b38;font-size:.88rem;margin-bottom:2px}.hero-feature span{font-size:.77rem;color:#7a8295}
+.top-picks-title{font-family:'Bricolage Grotesque',Inter,sans-serif;font-size:1.4rem;font-weight:850;color:var(--ink);letter-spacing:-.03em;margin:.35rem 0 .08rem}.top-picks-sub{font-size:.9rem;color:#7a8295;margin-bottom:.65rem}.top-pick-card{background:linear-gradient(155deg,#fff 0%,#faf8ff 100%);border:1px solid #e7e5ef;border-radius:20px;padding:15px;height:100%;min-height:188px;box-shadow:0 12px 28px rgba(17,24,39,.05)}.top-pick-label{font-size:.69rem;letter-spacing:.11em;text-transform:uppercase;font-weight:900;color:#ff5954}.top-pick-title{font-family:'Bricolage Grotesque',Inter,sans-serif;font-size:1.08rem;line-height:1.1;font-weight:850;color:#1d2230;margin:8px 0 6px}.top-pick-meta{font-size:.78rem;color:#737b8c;line-height:1.4}.top-pick-score{display:inline-flex;margin-top:10px;border-radius:999px;background:#edf9f1;border:1px solid #c4e8ce;color:#24643a;padding:5px 8px;font-size:.73rem;font-weight:850}
+.quick-filter-title{font-size:.76rem;text-transform:uppercase;letter-spacing:.1em;color:#9097a5;font-weight:900;margin-top:.9rem}.share-copy{font-size:.8rem;color:#777f90}.timeline-card{background:linear-gradient(160deg,#fff,#f8f9fc);border:1px solid #e5e8ef;border-radius:18px;padding:15px;min-height:132px;box-shadow:0 10px 25px rgba(17,24,39,.045)}.timeline-time{font-size:.72rem;letter-spacing:.09em;text-transform:uppercase;color:#ff5954;font-weight:900}.timeline-step{font-size:1rem;font-weight:850;color:#202635;margin:7px 0 4px}.timeline-detail{font-size:.84rem;line-height:1.42;color:#697184}
+[data-testid="stTabs"] button[role="tab"]{font-weight:850!important;font-size:.92rem!important;padding-left:18px!important;padding-right:18px!important}
+@media(max-width:800px){.hero-feature-grid{grid-template-columns:1fr}.product-profile{align-items:flex-start}.profile-connected{display:none}.top-pick-card{min-height:160px}}
+
+</style>
 """,
     unsafe_allow_html=True,
 )
@@ -949,13 +974,136 @@ def format_when(event):
 
 
 def render_hero(city: str, state: str, radius: int, start_date: str, end_date: str, keyword: str = "") -> None:
-    st.markdown("""
+    st.markdown('''
     <div class="new-hero">
-      <div class="hero-eyebrow">Personalized to your Spotify</div>
-      <div class="hero-h1">Encore AI is ranking shows for <span style="color:#ff5954;">your taste</span>.</div>
-      <div class="hero-sub">Use the working filters in the left sidebar, then click <b>Get recommendations</b>. The promoted feedback model stays active automatically.</div>
+      <div class="hero-eyebrow">Concert discovery, personalized</div>
+      <div class="hero-h1">Find concerts that actually match <span style="color:#ff5954;">your taste.</span></div>
+      <div class="hero-sub">Connect Spotify, choose a city, and get a short list of shows worth caring about — with clear reasons, a personal playlist, and help planning the night.</div>
+      <div class="hero-feature-grid">
+        <div class="hero-feature"><strong>Personalized by Spotify</strong><span>Your artists, tracks, and listening patterns.</span></div>
+        <div class="hero-feature"><strong>Ranked by music fit</strong><span>Direct matches plus relevant discoveries.</span></div>
+        <div class="hero-feature"><strong>Save and plan the night</strong><span>Shortlist shows, compare picks, and build a plan.</span></div>
+      </div>
     </div>
-    """, unsafe_allow_html=True)
+    ''', unsafe_allow_html=True)
+
+
+def render_profile_header(user: Dict[str, Any], top_artists: List[Dict[str, Any]]) -> None:
+    name = str(user.get("display_name") or "Spotify listener")
+    image = user.get("image_url")
+    if not image:
+        image = next((a.get("image_url") for a in (top_artists or []) if a.get("image_url")), None)
+    initial = escape(name[:1].upper() if name else "E")
+    avatar = (
+        f'<img class="profile-avatar" src="{escape(str(image))}" alt="{escape(name)}">'
+        if image else f'<div class="profile-fallback">{initial}</div>'
+    )
+    source = "Spotify connected" if user.get("user_id") != "demo_user" else "Demo taste profile"
+    st.markdown(
+        f'''<div class="product-profile">
+          <div class="profile-left">{avatar}<div><div class="profile-name">{escape(name)}</div><div class="profile-meta">Taste refreshed today · Personalized recommendations ready</div></div></div>
+          <div class="profile-connected"><span style="width:7px;height:7px;border-radius:50%;background:#1DB954;display:inline-block"></span>{escape(source)}</div>
+        </div>''',
+        unsafe_allow_html=True,
+    )
+
+
+def _share_event_text(event: Dict[str, Any]) -> str:
+    return (
+        "My Encore AI concert pick:\n"
+        f"{_cc_event_title(event)} — {_cc_event_venue(event)} — {format_when(event)}\n"
+        f"{_cc_match_score_label(event)}"
+    )
+
+
+def _is_weekend_event(event: Dict[str, Any]) -> bool:
+    if int(event.get("weekend_event") or 0) == 1:
+        return True
+    try:
+        return datetime.strptime(str(event.get("date"))[:10], "%Y-%m-%d").weekday() >= 4
+    except Exception:
+        return False
+
+
+def apply_quick_filter(events: List[Dict[str, Any]], quick_filter: str) -> List[Dict[str, Any]]:
+    rows = list(events or [])
+    choice = str(quick_filter or "Best for me")
+    if choice == "This weekend":
+        rows = [e for e in rows if _is_weekend_event(e)]
+    elif choice == "Direct matches":
+        rows = [e for e in rows if int(e.get("has_direct_artist_match") or 0) == 1]
+    elif choice == "New discoveries":
+        rows = [e for e in rows if int(e.get("has_direct_artist_match") or 0) == 0]
+    elif choice == "Date night":
+        rows = [e for e in rows if _is_weekend_event(e) or float(e.get("venue_quality_signal") or 0) >= 45]
+    elif choice == "Under $50":
+        rows = [e for e in rows if isinstance(e.get("min_price"), (int, float)) and float(e.get("min_price")) <= 50]
+    elif choice == "Intimate venues":
+        words = ("club", "room", "parish", "mohawk", "scoot", "antone", "lounge", "bar", "theatre", "theater", "hall")
+        rows = [e for e in rows if any(w in _cc_event_venue(e).lower() for w in words)]
+    return sorted(rows, key=lambda e: _cc_event_score(e), reverse=True)
+
+
+def _unique_pick(candidates: List[Dict[str, Any]], used: set) -> Dict[str, Any] | None:
+    for event in candidates:
+        key = _cc_event_id(event) or (_cc_event_title(event), str(event.get("date")))
+        if key not in used:
+            used.add(key)
+            return event
+    return None
+
+
+def render_top_picks(events: List[Dict[str, Any]], session_id: str) -> None:
+    events = sorted(_dedupe_events_for_display(events or []), key=lambda e: _cc_event_score(e), reverse=True)
+    if not events:
+        return
+    used = set()
+    direct = sorted([e for e in events if int(e.get("has_direct_artist_match") or 0) == 1], key=lambda e: _cc_event_score(e), reverse=True)
+    discovery = sorted([e for e in events if int(e.get("has_direct_artist_match") or 0) == 0], key=lambda e: _cc_event_score(e), reverse=True)
+    night_out = sorted(
+        events,
+        key=lambda e: _cc_event_score(e) * .62 + float(e.get("venue_quality_signal") or 0) * .20 + (12 if _is_weekend_event(e) else 0) + (6 if e.get("min_price") is not None else 0),
+        reverse=True,
+    )
+    definitions = [
+        ("Best Match", events),
+        ("Direct Artist Match", direct or events),
+        ("Best Discovery", discovery or events),
+        ("Best Night Out", night_out),
+    ]
+    picks = []
+    for label, pool in definitions:
+        pick = _unique_pick(pool, used)
+        if pick:
+            picks.append((label, pick))
+    if not picks:
+        return
+
+    st.markdown('<div class="top-picks-title">Your Top Picks</div><div class="top-picks-sub">The shows most worth your attention right now.</div>', unsafe_allow_html=True)
+    cols = st.columns(len(picks))
+    for idx, ((label, event), col) in enumerate(zip(picks, cols)):
+        with col:
+            title = escape(_cc_event_title(event) or "Concert")
+            meta = escape(f"{format_when(event)} · {_cc_event_venue(event)}")
+            st.markdown(
+                f'''<div class="top-pick-card"><div class="top-pick-label">{escape(label)}</div><div class="top-pick-title">{title}</div><div class="top-pick-meta">{meta}</div><div class="top-pick-score">{escape(_cc_match_score_label(event))}</div></div>''',
+                unsafe_allow_html=True,
+            )
+            links = event_links(event)
+            if links:
+                st.link_button("Tickets", links[0], use_container_width=True)
+            if st.button("Plan night", key=f"top_pick_plan_{session_id}_{idx}", use_container_width=True):
+                st.session_state.plan_event_id = event.get("event_id")
+                st.session_state.plan_source_request = "Recommended list"
+                st.toast("Added to Plan a Night")
+
+    with st.popover("Share my top picks"):
+        share_text = "My Encore AI Top Picks\n\n" + "\n".join(
+            f"{i}. {_cc_event_title(event)} — {_cc_event_venue(event)} — {_cc_match_score_label(event)}"
+            for i, (_, event) in enumerate(picks, 1)
+        )
+        st.code(share_text, language=None)
+        st.caption("Use the copy button, then send it to a friend.")
 
 def render_stats_strip(ranked_count: int, direct_count: int, price_coverage: int, model_active: bool, bundle: Dict[str, Any] | None = None) -> None:
     """V29: cleaner Simple Copilot with request-window aware picks and fewer tabs."""
@@ -1291,15 +1439,16 @@ def render_event_card(event: Dict[str, Any], idx: int, section: str, user, sessi
                 """,
                 unsafe_allow_html=True,
             )
-            with st.popover("Feedback reasons"):
-                st.multiselect(
-                    "Pick any that apply",
-                    FEEDBACK_REASON_OPTIONS,
-                    key=reason_key,
-                    help="Optional, but helpful. It tells the model whether the music match, price, venue, or timing caused your choice.",
-                )
-                st.caption("Select multiple reasons if useful. The main label is still Want / Maybe / Not a Fit.")
-
+            if ADMIN_MODE:
+                with st.popover("Feedback reasons"):
+                    st.multiselect(
+                        "Pick any that apply",
+                        FEEDBACK_REASON_OPTIONS,
+                        key=reason_key,
+                        help="Optional, but helpful. It tells the model whether the music match, price, venue, or timing caused your choice.",
+                    )
+                    st.caption("Select multiple reasons if useful. The main label is still Want / Maybe / Not a Fit.")
+    
             action_cols = st.columns([1.0, 0.07, 1.0, 0.75, 1.0, 2.2], vertical_alignment="center")
             with action_cols[0]:
                 if links:
@@ -1325,12 +1474,20 @@ def render_event_card(event: Dict[str, Any], idx: int, section: str, user, sessi
                     st.toast("Saved as Maybe")
                     st.rerun()
             with action_cols[4]:
-                if st.button("✕ Not a fit", key=f"no_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
+                if st.button("Not for me", key=f"no_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
                     save_feedback_action(user, session_id, event, "not_for_me", rank_position=idx, feedback_reasons=_feedback_reason_value(reason_key))
                     st.session_state.hidden_event_ids.add(str(event.get("event_id")))
                     st.toast("Hidden as Not a Fit")
                     st.rerun()
-            st.markdown('<div class="action-hint">Tickets opens directly. Use Want / Maybe / Not a fit to teach the personal ranker when you train in batches.</div>', unsafe_allow_html=True)
+            with action_cols[5]:
+                if st.button("Plan night", key=f"plan_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
+                    st.session_state.plan_event_id = event.get("event_id")
+                    st.session_state.plan_source_request = "Recommended list"
+                    st.toast("Added to Plan a Night")
+                with st.popover("Share"):
+                    st.code(_share_event_text(event), language=None)
+            if ADMIN_MODE:
+                st.markdown('<div class="action-hint">Tickets opens directly. Feedback updates the personal ranker when you retrain it.</div>', unsafe_allow_html=True)
 
 # ---------------- Sidebar ----------------
 with st.sidebar:
@@ -1364,44 +1521,45 @@ with st.sidebar:
         index=0,
     )
 
-    search_speed = st.selectbox(
-        "Search speed",
-        ["Fast demo", "Balanced", "Deep search"],
-        index=0,
-        help="Fast demo is best for testing. Deep search finds more shows/prices but is slower.",
-    )
     speed_profiles = {
         "Fast demo": {"size": 80, "ticketmaster_pages": 1, "seatgeek_pages": 1, "top_artist_search_count": 10, "price_enrichment_limit": 8, "display_page_size": 20},
         "Balanced": {"size": 120, "ticketmaster_pages": 2, "seatgeek_pages": 2, "top_artist_search_count": 15, "price_enrichment_limit": 15, "display_page_size": 30},
         "Deep search": {"size": 200, "ticketmaster_pages": 5, "seatgeek_pages": 5, "top_artist_search_count": 30, "price_enrichment_limit": 40, "display_page_size": 40},
     }
+
+    if ADMIN_MODE:
+        search_speed = st.selectbox(
+            "Search depth",
+            ["Fast demo", "Balanced", "Deep search"],
+            index=0,
+            help="Controls API depth and price enrichment.",
+        )
+    else:
+        search_speed = "Fast demo"
     speed_config = speed_profiles[search_speed]
 
-    with st.expander("More options"):
-        st.caption("Sources, page depth, dedupe, and price enrichment are automatic in V21.")
-        group_mode = st.checkbox("Blend a second listener", value=False)
-        group_name = "Friend"
-        group_artist_text = ""
+    group_mode = False
+    group_name = "Friend"
+    group_artist_text = ""
+    with st.expander("Going with someone?"):
+        group_mode = st.checkbox("Blend our music taste", value=False)
         if group_mode:
-            group_name = st.text_input("Second listener", "Maggie")
-            group_artist_text = st.text_area("Their favorite artists", "", height=70)
-        refresh_taste = st.checkbox("Refresh Spotify taste", value=False)
-        top_artist_search_count = st.slider("Top Spotify artists searched directly", 10, 40, 30, step=5)
+            group_name = st.text_input("Their name", "Friend")
+            group_artist_text = st.text_area("A few artists they love", "", height=70, placeholder="Mt. Joy, Noah Kahan, Fred again..")
+            st.caption("Encore AI will look for shows that work for both of you.")
 
-    with st.expander("Testing controls"):
-        use_feedback_model_toggle = st.checkbox(
-            "Use feedback model",
-            value=True,
-            help="Turn off to test pure Spotify/taste ranking without the 507-rating model.",
-        )
-        use_saved_history_toggle = st.checkbox(
-            "Use saved Want/Maybe history",
-            value=True,
-            help="Turn off to hide old saved badges, saved-first sorting, hidden history, and My Playlist memory for a clean cold-start test.",
-        )
-        st.caption("For a clean recommender test, turn both off, then click Get recommendations.")
+    refresh_taste = False
+    top_artist_search_count = int(speed_config["top_artist_search_count"])
+    use_feedback_model_toggle = True
+    use_saved_history_toggle = True
 
-    # Product defaults: keep technical source choices out of the main UI.
+    if ADMIN_MODE:
+        with st.expander("Admin controls"):
+            refresh_taste = st.checkbox("Refresh Spotify taste", value=False)
+            top_artist_search_count = st.slider("Top Spotify artists searched directly", 10, 40, top_artist_search_count, step=5)
+            use_feedback_model_toggle = st.checkbox("Use feedback model", value=True)
+            use_saved_history_toggle = st.checkbox("Use saved history", value=True)
+
     size = int(speed_config["size"])
     grouping_mode = "Collapse repeated dates"
     search_top_artists = True
@@ -1414,17 +1572,11 @@ with st.sidebar:
     display_page_size = int(speed_config["display_page_size"])
     top_artist_search_count = min(int(top_artist_search_count), int(speed_config["top_artist_search_count"]))
 
-    status = model_status()
-    if not use_feedback_model_toggle:
-        status = {
-            "active": False,
-            "label": "Feedback model off",
-            "detail": "Test mode: using Spotify/taste ranking only.",
-            "bundle": None,
-        }
-    status_class = "" if status["active"] else " status-base"
-    st.markdown(f'<span class="status-pill{status_class}">{status["label"]}</span>', unsafe_allow_html=True)
-    st.caption(status["detail"])
+    if ADMIN_MODE:
+        status = model_status()
+        status_class = "" if status["active"] else " status-base"
+        st.markdown(f'<span class="status-pill{status_class}">{status["label"]}</span>', unsafe_allow_html=True)
+        st.caption(status["detail"])
     run = st.button("Get recommendations", type="primary", use_container_width=True)
 
 
@@ -1547,7 +1699,6 @@ if run:
 
 
 if st.session_state.recommendation_run is None:
-    st.info("Choose Spotify or Demo, set your city and dates, then click **Get recommendations**.")
     st.stop()
 
 run_data = st.session_state.recommendation_run
@@ -1572,11 +1723,14 @@ price_count = sum(
 price_coverage = round(price_count / len(ranked_events) * 100) if ranked_events else 0
 direct_count = sum(1 for event in ranked_events if int(event.get("has_direct_artist_match") or 0) == 1)
 
+render_profile_header(user, top_artists)
+
 active_model = run_data.get("filters", {}).get("model_active")
 bundle = load_feedback_model("current") if active_model else None
 # V29 keeps noisy dashboard stats out of the UI. Keep only the lightweight model badge/status.
 ranked_events = _dedupe_events_for_display(ranked_events)
-render_stats_strip(len(ranked_events), direct_count, price_coverage, bool(active_model), bundle)
+if ADMIN_MODE:
+    render_stats_strip(len(ranked_events), direct_count, price_coverage, bool(active_model), bundle)
 
 # Playlist memory is shared across Discover, My Playlist, and Copilot unless test mode disables it.
 if use_saved_history_toggle:
@@ -1586,11 +1740,14 @@ else:
 playlist_memory_events = [] if playlist_memory_df.empty else [interaction_row_to_event(row) for row in playlist_memory_df.to_dict(orient="records")]
 active_playlist_events = [] if playlist_memory_df.empty else [interaction_row_to_event(row) for row in playlist_memory_df[playlist_memory_df["action"].isin(["want_to_go", "maybe"])].to_dict(orient="records")]
 
-if source_counts.get("errors"):
+if ADMIN_MODE and source_counts.get("errors"):
     with st.expander("Source warnings"):
         st.json(source_counts.get("errors"))
 
-main_tabs = st.tabs(["Discover", "My Playlist", "Copilot", "Taste by Season", "Behind the Scenes"])
+tab_labels = ["Discover", "Playlist", "Copilot", "Taste"]
+if ADMIN_MODE:
+    tab_labels.append("Behind the Scenes")
+main_tabs = st.tabs(tab_labels)
 
 
 
@@ -1677,6 +1834,7 @@ with main_tabs[0]:
     else:
         prefs_df, status_by_id, hidden_ids = pd.DataFrame(), {}, set()
     base_events = _dedupe_events_for_display([_cc_add_spotify_fields(e) for e in (ranked_events or [])])
+    render_top_picks(base_events, session_id)
     venues = sorted({ _cc_event_venue(e) for e in base_events if _cc_event_venue(e) })
     city_values_current = sorted({ _cc_event_city(e) for e in base_events if _cc_event_city(e) })
     genre_options = ["All genres"] + sorted({str(_cc_genre(e)) for e in base_events if _cc_genre(e)})
@@ -1687,18 +1845,32 @@ with main_tabs[0]:
         unsafe_allow_html=True,
     )
 
-    f_search, f_city, f_venue, f_genre, f_hidden = st.columns([2.35, .95, 1.15, 1.05, .65], vertical_alignment="bottom")
-    with f_search:
-        discover_search_text = st.text_input("Search artist, show, genre, venue", placeholder="Type Ella, ACL, electronic, Moody Center...", key="discover_search_text_v40")
-    discover_sort = "Saved first"  # V41: no Sort dropdown; automatic saved-first ranking
-    with f_city:
-        discover_city = st.selectbox("City", ["All cities"] + city_values_current, key="discover_city_filter_v40")
-    with f_venue:
-        display_venue = st.selectbox("Venue", ["All venues"] + venues, key="discover_venue_filter_v40")
-    with f_genre:
-        discover_genre = st.selectbox("Genre", genre_options, key="discover_genre_v40")
-    with f_hidden:
-        show_hidden = st.checkbox("Hidden", value=False, help="Show events marked Not a Fit.", key="discover_hidden_v40")
+    st.markdown('<div class="quick-filter-title">Explore your recommendations</div>', unsafe_allow_html=True)
+    quick_filter = st.radio(
+        "Explore",
+        ["Best for me", "This weekend", "Direct matches", "New discoveries", "Date night", "Under $50", "Intimate venues"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="discover_quick_filter_public",
+    )
+
+    discover_search_text = ""
+    discover_city = "All cities"
+    display_venue = "All venues"
+    discover_genre = "All genres"
+    show_hidden = False
+    with st.expander("Search and filters"):
+        f_search, f_city, f_venue, f_genre, f_hidden = st.columns([2.35, .95, 1.15, 1.05, .65], vertical_alignment="bottom")
+        with f_search:
+            discover_search_text = st.text_input("Search artist, show, genre, venue", placeholder="Type an artist, venue, or genre", key="discover_search_text_v40")
+        with f_city:
+            discover_city = st.selectbox("City", ["All cities"] + city_values_current, key="discover_city_filter_v40")
+        with f_venue:
+            display_venue = st.selectbox("Venue", ["All venues"] + venues, key="discover_venue_filter_v40")
+        with f_genre:
+            discover_genre = st.selectbox("Genre", genre_options, key="discover_genre_v40")
+        with f_hidden:
+            show_hidden = st.checkbox("Hidden", value=False, help="Show events marked Not for me.", key="discover_hidden_v40")
 
     visible = _cc_apply_discover_filters(
         base_events,
@@ -1711,6 +1883,8 @@ with main_tabs[0]:
     )
     if not show_hidden:
         visible = [event for event in visible if str(event.get("event_id")) not in hidden_ids and str(event.get("event_id")) not in st.session_state.hidden_event_ids]
+
+    visible = apply_quick_filter(visible, quick_filter)
 
     if use_saved_history_toggle:
         # Normal product mode: saved Want first, saved Maybe second, then Match Score.
@@ -1735,13 +1909,13 @@ with main_tabs[0]:
 # ---------------- Playlist ----------------
 with main_tabs[1]:
     st.markdown('<div class="section-head">My Playlist</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-sub">Every show you have acted on. Want and Maybe are saved options. Not a Fit is hidden from Discover unless you turn it back on. V36 keeps your trained model and attempts to restore old saved actions from prior local folders.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-sub">Your personal shortlist of concerts you want to remember, compare, or plan.</div>', unsafe_allow_html=True)
     playlist = load_playlist_preferences(user.get("user_id", "unknown_user")) if use_saved_history_toggle else pd.DataFrame()
 
     if not use_saved_history_toggle:
-        st.info("Saved history is OFF for this test run. Turn it back on in Testing controls to view My Playlist.")
+        st.info("Your playlist is unavailable in this session.")
     elif playlist.empty:
-        st.info("No saved playlist rows are showing yet. Your trained model is still active, but saved Want/Maybe UI rows may need a database restore. Use Want, Maybe, or Not a Fit on Discover to rebuild this list.")
+        st.info("Your playlist is empty. Save a show as Want or Maybe from Discover to add it here.")
     else:
         want_count = int((playlist["action"] == "want_to_go").sum())
         maybe_count = int((playlist["action"] == "maybe").sum())
@@ -1861,7 +2035,7 @@ with main_tabs[1]:
 # ---------------- Copilot ----------------
 with main_tabs[2]:
     st.markdown('<div class="section-head">Copilot</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-sub">Ask for the best shows or turn one concert into a simple night-out plan.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-sub">Tell Encore what kind of night you want. It will compare your ranked shows and give you a clear recommendation.</div>', unsafe_allow_html=True)
 
     copilot_speed_mode = st.radio(
         "Copilot mode",
@@ -2260,7 +2434,7 @@ with main_tabs[2]:
                         t = _item_text(item, ['time', 'start_time', 'when'], f'Step {i+1}')
                         title = _item_text(item, ['title', 'label', 'activity', 'headline', 'step'], ['Pre-show', 'Head to venue', 'Show', 'After show'][i] if i < 4 else 'Step')
                         place = _item_text(item, ['place', 'venue', 'restaurant', 'bar', 'name', 'detail', 'description', 'details', 'notes'], 'Details loading')
-                        st.markdown(f"<div class='mini-card'><b>{t}</b><br><strong>{title}</strong><br><span>{place}</span></div>", unsafe_allow_html=True)
+                        st.markdown(f"<div class='timeline-card'><div class='timeline-time'>{t}</div><div class='timeline-step'>{title}</div><div class='timeline-detail'>{place}</div></div>", unsafe_allow_html=True)
             nearby = _places_from_plan(structured)
             if nearby:
                 st.markdown('#### Nearby options')
@@ -2307,15 +2481,27 @@ with main_tabs[2]:
         with c2:
             source_choice = st.radio('Use', ['Both', 'Current search', 'My Playlist'], horizontal=True, index=0, key='simple_copilot_source')
 
-        quick = st.radio('Quick goal', ['Best overall', 'Date night', 'Top artists', 'New discovery', 'Weekend plan'], horizontal=True, index=0, key='simple_goal_chip')
         goal_defaults = {
-            'Best overall': 'Recommend the best shows in this city. Separate recommended, top artist match, most compatible, new discovery, and best night-out plan.',
-            'Date night': 'Find the best date-night concerts in this city. Favor reliable venues, good timing, and nearby dinner or drinks.',
-            'Top artists': 'Find the strongest direct or near-direct artist matches in this city and explain why they fit my taste.',
-            'New discovery': 'Find a fresh discovery in this city that still fits my taste. Avoid obvious picks unless they are clearly best.',
-            'Weekend plan': 'Find the best weekend show in this city and explain the best full night-out option.',
+            'Best show for me': 'Recommend the single best show for me and give me two strong alternatives.',
+            'Plan a date night': 'Find the best concert for a date night and explain what makes the full night work.',
+            'This weekend': 'What should I see this weekend? Prioritize timing, music fit, and an easy night out.',
+            'Smaller venue': 'Find me a great show at a smaller or more intimate venue.',
+            'Compare top 3': 'Compare my top three concert options and tell me which one you would choose.',
         }
-        user_question = st.text_area('What are you looking for?', value=goal_defaults.get(quick, goal_defaults['Best overall']), height=110, key='simple_copilot_prompt')
+        if 'simple_copilot_prompt_value' not in st.session_state:
+            st.session_state.simple_copilot_prompt_value = goal_defaults['Best show for me']
+        st.markdown('<div class="quick-filter-title">Try asking</div>', unsafe_allow_html=True)
+        prompt_cols = st.columns(5)
+        for prompt_idx, (label, prompt_text) in enumerate(goal_defaults.items()):
+            with prompt_cols[prompt_idx]:
+                if st.button(label, key=f"copilot_prompt_{prompt_idx}", use_container_width=True):
+                    st.session_state.simple_copilot_prompt_value = prompt_text
+        user_question = st.text_area(
+            'What are you looking for?',
+            height=105,
+            key='simple_copilot_prompt_value',
+            placeholder='Ask for a date night, a weekend show, a discovery, or a comparison...',
+        )
 
         if source_choice == 'Current search':
             base_events = _current_events
@@ -2483,190 +2669,191 @@ with main_tabs[3]:
 
 
 # ---------------- Behind the scenes ----------------
-with main_tabs[4]:
-    st.markdown('<div class="section-head">Behind the Scenes</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-sub">Technical controls and diagnostics for model review, testing, and interviews.</div>', unsafe_allow_html=True)
-    lab_tabs = st.tabs(["Coverage", "Model", "Train", "Logs"])
+if ADMIN_MODE:
+    with main_tabs[4]:
+        st.markdown('<div class="section-head">Behind the Scenes</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-sub">Technical controls and diagnostics for model review, testing, and interviews.</div>', unsafe_allow_html=True)
+        lab_tabs = st.tabs(["Coverage", "Model", "Train", "Logs"])
 
-    with lab_tabs[0]:
-        raw_total = int(source_counts.get("raw_total", len(ranked_events)))
-        deduped_total = int(source_counts.get("deduped_total", len(ranked_events)))
-        metrics = st.columns(4)
-        metrics[0].metric("Raw candidates", raw_total)
-        metrics[1].metric("After dedupe", deduped_total)
-        metrics[2].metric("Prices enriched", source_counts.get("price_enriched", 0))
-        metrics[3].metric("Price coverage", f"{price_coverage}%")
-        by_source = source_counts.get("by_source", {})
-        if by_source:
-            source_df = pd.DataFrame([{"source": source, "events": count} for source, count in by_source.items()])
-            st.plotly_chart(px.bar(source_df, x="source", y="events", title="Candidates by source"), use_container_width=True)
-        diagnostic_columns = [column for column in ["event_name", "date", "venue", "source", "min_price", "median_price", "average_price", "price_source", "final_score"] if column in ranked_df.columns]
-        st.dataframe(ranked_df[diagnostic_columns].head(250), use_container_width=True, hide_index=True)
+        with lab_tabs[0]:
+            raw_total = int(source_counts.get("raw_total", len(ranked_events)))
+            deduped_total = int(source_counts.get("deduped_total", len(ranked_events)))
+            metrics = st.columns(4)
+            metrics[0].metric("Raw candidates", raw_total)
+            metrics[1].metric("After dedupe", deduped_total)
+            metrics[2].metric("Prices enriched", source_counts.get("price_enriched", 0))
+            metrics[3].metric("Price coverage", f"{price_coverage}%")
+            by_source = source_counts.get("by_source", {})
+            if by_source:
+                source_df = pd.DataFrame([{"source": source, "events": count} for source, count in by_source.items()])
+                st.plotly_chart(px.bar(source_df, x="source", y="events", title="Candidates by source"), use_container_width=True)
+            diagnostic_columns = [column for column in ["event_name", "date", "venue", "source", "min_price", "median_price", "average_price", "price_source", "final_score"] if column in ranked_df.columns]
+            st.dataframe(ranked_df[diagnostic_columns].head(250), use_container_width=True, hide_index=True)
 
-    with lab_tabs[1]:
-        current_model = load_feedback_model("current")
-        previous_model = load_feedback_model("previous")
-        if current_model:
-            weight = float(current_model.get("recommended_model_weight") or 0.20)
-            st.success(
-                f"Current learning-to-rank model is automatically active at {weight:.0%} influence. "
-                f"It was trained on {current_model.get('n_rows', 0)} ratings across {current_model.get('n_sessions', 0)} sessions."
-            )
-        else:
-            st.info("No promoted feedback model yet. Spotify + genre-cluster ranking is active.")
+        with lab_tabs[1]:
+            current_model = load_feedback_model("current")
+            previous_model = load_feedback_model("previous")
+            if current_model:
+                weight = float(current_model.get("recommended_model_weight") or 0.20)
+                st.success(
+                    f"Current learning-to-rank model is automatically active at {weight:.0%} influence. "
+                    f"It was trained on {current_model.get('n_rows', 0)} ratings across {current_model.get('n_sessions', 0)} sessions."
+                )
+            else:
+                st.info("No promoted feedback model yet. Spotify + genre-cluster ranking is active.")
 
-        model_rows = []
-        for name, bundle in [("Current", current_model), ("Previous", previous_model)]:
-            if not bundle:
-                continue
-            metrics = bundle.get("test_metrics", {})
-            model_rows.append({
-                "model": name,
-                "trained_at": bundle.get("trained_at"),
-                "rows": bundle.get("n_rows"),
-                "sessions": bundle.get("n_sessions"),
-                "backend": bundle.get("training_backend"),
-                "promoted": bundle.get("promoted"),
-                "compared_with": bundle.get("promotion_comparator"),
-                "precision@5": metrics.get("model_precision_at_5"),
-                "ndcg@5": metrics.get("model_ndcg_at_5"),
-                "ndcg@10": metrics.get("model_ndcg_at_10"),
-                "not_for_me@10": metrics.get("model_negative_rate_at_10"),
-            })
-        if model_rows:
-            st.dataframe(pd.DataFrame(model_rows), use_container_width=True, hide_index=True)
+            model_rows = []
+            for name, bundle in [("Current", current_model), ("Previous", previous_model)]:
+                if not bundle:
+                    continue
+                metrics = bundle.get("test_metrics", {})
+                model_rows.append({
+                    "model": name,
+                    "trained_at": bundle.get("trained_at"),
+                    "rows": bundle.get("n_rows"),
+                    "sessions": bundle.get("n_sessions"),
+                    "backend": bundle.get("training_backend"),
+                    "promoted": bundle.get("promoted"),
+                    "compared_with": bundle.get("promotion_comparator"),
+                    "precision@5": metrics.get("model_precision_at_5"),
+                    "ndcg@5": metrics.get("model_ndcg_at_5"),
+                    "ndcg@10": metrics.get("model_ndcg_at_10"),
+                    "not_for_me@10": metrics.get("model_negative_rate_at_10"),
+                })
+            if model_rows:
+                st.dataframe(pd.DataFrame(model_rows), use_container_width=True, hide_index=True)
 
-        st.subheader("Same-event model comparison")
-        st.caption("This freezes the concerts already on screen, then shows how the baseline, current model, and previous model would rank the exact same events.")
-        comparison = compare_model_variants(ranked_df)
-        comparison.insert(0, "event", ranked_df["event_name"].values)
-        comparison["live_feed_rank"] = range(1, len(comparison) + 1)
-        display_cols = [
-            "event", "live_feed_rank", "baseline_rank", "current_rank", "previous_rank",
-            "baseline_score", "current_score", "previous_score",
-        ]
-        display_cols = [column for column in display_cols if column in comparison.columns]
-        st.dataframe(comparison[display_cols].head(100), use_container_width=True, hide_index=True)
+            st.subheader("Same-event model comparison")
+            st.caption("This freezes the concerts already on screen, then shows how the baseline, current model, and previous model would rank the exact same events.")
+            comparison = compare_model_variants(ranked_df)
+            comparison.insert(0, "event", ranked_df["event_name"].values)
+            comparison["live_feed_rank"] = range(1, len(comparison) + 1)
+            display_cols = [
+                "event", "live_feed_rank", "baseline_rank", "current_rank", "previous_rank",
+                "baseline_score", "current_score", "previous_score",
+            ]
+            display_cols = [column for column in display_cols if column in comparison.columns]
+            st.dataframe(comparison[display_cols].head(100), use_container_width=True, hide_index=True)
 
-        preview_cols = st.columns(3)
-        variants = [
-            ("Baseline top 10", "baseline_rank"),
-            ("Current model top 10", "current_rank"),
-            ("Previous model top 10", "previous_rank"),
-        ]
-        for col, (title, rank_col) in zip(preview_cols, variants):
-            with col:
-                st.markdown(f"**{title}**")
-                if rank_col not in comparison.columns or comparison[rank_col].isna().all():
-                    st.caption("Not available")
-                else:
-                    preview = comparison.sort_values(rank_col).head(10)
-                    for _, row in preview.iterrows():
-                        st.write(f"{int(row[rank_col])}. {row['event']}")
+            preview_cols = st.columns(3)
+            variants = [
+                ("Baseline top 10", "baseline_rank"),
+                ("Current model top 10", "current_rank"),
+                ("Previous model top 10", "previous_rank"),
+            ]
+            for col, (title, rank_col) in zip(preview_cols, variants):
+                with col:
+                    st.markdown(f"**{title}**")
+                    if rank_col not in comparison.columns or comparison[rank_col].isna().all():
+                        st.caption("Not available")
+                    else:
+                        preview = comparison.sort_values(rank_col).head(10)
+                        for _, row in preview.iterrows():
+                            st.write(f"{int(row[rank_col])}. {row['event']}")
 
-        signal_columns = [column for column in [
-            "event_name", "match_confidence", "winning_genre_cluster_label",
-            "anchor_artists", "hybrid_score", "model_score", "model_weight", "final_score",
-            "genre_cluster_score", "embedding_rank_score", "exact_artist_score",
-        ] if column in ranked_df.columns]
-        with st.expander("Feature-level ranking signals"):
-            st.dataframe(ranked_df[signal_columns].head(100), use_container_width=True, hide_index=True)
-    with lab_tabs[2]:
-        summary = summarize_feedback()
-        active_bundle = load_feedback_model("current")
-        current_preferences = int(summary.get("latest_preference_rows", 0))
-        trained_rows = int(active_bundle.get("n_rows", 0)) if active_bundle else 0
-        new_since_train = max(0, current_preferences - trained_rows)
+            signal_columns = [column for column in [
+                "event_name", "match_confidence", "winning_genre_cluster_label",
+                "anchor_artists", "hybrid_score", "model_score", "model_weight", "final_score",
+                "genre_cluster_score", "embedding_rank_score", "exact_artist_score",
+            ] if column in ranked_df.columns]
+            with st.expander("Feature-level ranking signals"):
+                st.dataframe(ranked_df[signal_columns].head(100), use_container_width=True, hide_index=True)
+        with lab_tabs[2]:
+            summary = summarize_feedback()
+            active_bundle = load_feedback_model("current")
+            current_preferences = int(summary.get("latest_preference_rows", 0))
+            trained_rows = int(active_bundle.get("n_rows", 0)) if active_bundle else 0
+            new_since_train = max(0, current_preferences - trained_rows)
 
-        train_metrics = st.columns(5)
-        train_metrics[0].metric("Current preferences", current_preferences)
-        train_metrics[1].metric("Search sessions", summary["unique_sessions"])
-        train_metrics[2].metric("Used by current model", trained_rows)
-        train_metrics[3].metric("New since training", new_since_train)
-        train_metrics[4].metric("Recommended batch", "30–50")
+            train_metrics = st.columns(5)
+            train_metrics[0].metric("Current preferences", current_preferences)
+            train_metrics[1].metric("Search sessions", summary["unique_sessions"])
+            train_metrics[2].metric("Used by current model", trained_rows)
+            train_metrics[3].metric("New since training", new_since_train)
+            train_metrics[4].metric("Recommended batch", "30–50")
 
-        if current_preferences < 60:
-            st.info(f"Collect at least 60 usable ratings before the first training run. You currently have {current_preferences}.")
-        elif active_bundle and new_since_train < 30:
-            st.info(f"Current model remains active. Add about {30 - new_since_train} more ratings before the next retraining batch.")
-        else:
-            st.success("You have enough feedback for a training batch. Train one candidate, then review the same-event comparison.")
+            if current_preferences < 60:
+                st.info(f"Collect at least 60 usable ratings before the first training run. You currently have {current_preferences}.")
+            elif active_bundle and new_since_train < 30:
+                st.info(f"Current model remains active. Add about {30 - new_since_train} more ratings before the next retraining batch.")
+            else:
+                st.success("You have enough feedback for a training batch. Train one candidate, then review the same-event comparison.")
 
-        with st.expander("Automatic promotion guardrails", expanded=False):
-            st.write(
-                "A candidate is saved every time, but it is promoted only when the holdout contains at least "
-                "15 ratings across 2 search sessions, NDCG@10 and top-5 quality do not decline, Not-for-Me "
-                "events do not rise in the top 10, direct Spotify matches are preserved, and the candidate "
-                "meaningfully improves on both the baseline and the current promoted model."
-            )
+            with st.expander("Automatic promotion guardrails", expanded=False):
+                st.write(
+                    "A candidate is saved every time, but it is promoted only when the holdout contains at least "
+                    "15 ratings across 2 search sessions, NDCG@10 and top-5 quality do not decline, Not-for-Me "
+                    "events do not rise in the top 10, direct Spotify matches are preserved, and the candidate "
+                    "meaningfully improves on both the baseline and the current promoted model."
+                )
 
-        if summary.get("actions"):
-            st.dataframe(
-                pd.DataFrame([{"action": key, "count": value} for key, value in summary["actions"].items()]),
-                use_container_width=True,
-                hide_index=True,
-            )
-        if summary.get("reasons"):
-            with st.expander("Feedback reasons"):
+            if summary.get("actions"):
                 st.dataframe(
-                    pd.DataFrame([{"reason": key, "count": value} for key, value in summary["reasons"].items()]),
+                    pd.DataFrame([{"action": key, "count": value} for key, value in summary["actions"].items()]),
                     use_container_width=True,
                     hide_index=True,
                 )
-
-        controls = st.columns(3)
-        with controls[0]:
-            if st.button("Train learning-to-rank candidate", type="primary"):
-                result = train_feedback_model(min_rows=60)
-                if result.get("ok"):
-                    st.success(result.get("message"))
-                    st.caption(
-                        f"Backend: {result.get('training_backend')} · Train rows: {result.get('n_train')} · "
-                        f"Holdout rows: {result.get('n_test')} · Holdout sessions: {result.get('n_test_sessions')}"
+            if summary.get("reasons"):
+                with st.expander("Feedback reasons"):
+                    st.dataframe(
+                        pd.DataFrame([{"reason": key, "count": value} for key, value in summary["reasons"].items()]),
+                        use_container_width=True,
+                        hide_index=True,
                     )
-                    if result.get("backend_warning"):
-                        st.warning(result.get("backend_warning"))
-                    if result.get("test_metrics"):
-                        metric_rows = [
-                            {"metric": key, "value": value}
-                            for key, value in result.get("test_metrics", {}).items()
-                            if key in {
-                                "baseline_precision_at_5", "model_precision_at_5",
-                                "baseline_ndcg_at_5", "model_ndcg_at_5",
-                                "baseline_ndcg_at_10", "model_ndcg_at_10",
-                                "baseline_negative_rate_at_10", "model_negative_rate_at_10",
-                            }
-                        ]
-                        st.dataframe(pd.DataFrame(metric_rows), use_container_width=True, hide_index=True)
-                else:
-                    st.warning(result.get("message"))
-        with controls[1]:
-            if st.button("Rollback to previous"):
-                result = rollback_to_previous()
-                st.success(result["message"]) if result.get("ok") else st.warning(result["message"])
-        with controls[2]:
-            if st.button("Clear all feedback"):
-                clear_all_feedback()
-                st.warning("Feedback database cleared.")
-                st.rerun()
 
-        versions = list_model_versions()
-        if versions:
-            st.subheader("Model history")
-            st.dataframe(pd.DataFrame(versions), use_container_width=True, hide_index=True)
-        feedback_df = get_feedback_df()
-        if not feedback_df.empty:
-            st.subheader("Recent feedback")
-            recent_cols = [column for column in [
-                "created_at", "event_name", "action", "feedback_reason",
-                "winning_genre_cluster_label", "why_recommended", "session_id",
-            ] if column in feedback_df.columns]
-            st.dataframe(feedback_df[recent_cols].head(100), use_container_width=True, hide_index=True)
-    with lab_tabs[3]:
-        calls = load_llm_calls()
-        if calls.empty:
-            st.info("No Copilot calls logged yet.")
-        else:
-            st.dataframe(calls, use_container_width=True, hide_index=True)
-            if "latency_ms" in calls.columns:
-                st.plotly_chart(px.histogram(calls, x="latency_ms", title="Copilot latency"), use_container_width=True)
+            controls = st.columns(3)
+            with controls[0]:
+                if st.button("Train learning-to-rank candidate", type="primary"):
+                    result = train_feedback_model(min_rows=60)
+                    if result.get("ok"):
+                        st.success(result.get("message"))
+                        st.caption(
+                            f"Backend: {result.get('training_backend')} · Train rows: {result.get('n_train')} · "
+                            f"Holdout rows: {result.get('n_test')} · Holdout sessions: {result.get('n_test_sessions')}"
+                        )
+                        if result.get("backend_warning"):
+                            st.warning(result.get("backend_warning"))
+                        if result.get("test_metrics"):
+                            metric_rows = [
+                                {"metric": key, "value": value}
+                                for key, value in result.get("test_metrics", {}).items()
+                                if key in {
+                                    "baseline_precision_at_5", "model_precision_at_5",
+                                    "baseline_ndcg_at_5", "model_ndcg_at_5",
+                                    "baseline_ndcg_at_10", "model_ndcg_at_10",
+                                    "baseline_negative_rate_at_10", "model_negative_rate_at_10",
+                                }
+                            ]
+                            st.dataframe(pd.DataFrame(metric_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.warning(result.get("message"))
+            with controls[1]:
+                if st.button("Rollback to previous"):
+                    result = rollback_to_previous()
+                    st.success(result["message"]) if result.get("ok") else st.warning(result["message"])
+            with controls[2]:
+                if st.button("Clear all feedback"):
+                    clear_all_feedback()
+                    st.warning("Feedback database cleared.")
+                    st.rerun()
+
+            versions = list_model_versions()
+            if versions:
+                st.subheader("Model history")
+                st.dataframe(pd.DataFrame(versions), use_container_width=True, hide_index=True)
+            feedback_df = get_feedback_df()
+            if not feedback_df.empty:
+                st.subheader("Recent feedback")
+                recent_cols = [column for column in [
+                    "created_at", "event_name", "action", "feedback_reason",
+                    "winning_genre_cluster_label", "why_recommended", "session_id",
+                ] if column in feedback_df.columns]
+                st.dataframe(feedback_df[recent_cols].head(100), use_container_width=True, hide_index=True)
+        with lab_tabs[3]:
+            calls = load_llm_calls()
+            if calls.empty:
+                st.info("No Copilot calls logged yet.")
+            else:
+                st.dataframe(calls, use_container_width=True, hide_index=True)
+                if "latency_ms" in calls.columns:
+                    st.plotly_chart(px.histogram(calls, x="latency_ms", title="Copilot latency"), use_container_width=True)

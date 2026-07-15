@@ -149,10 +149,12 @@ def get_spotify_client(cache_key: str = "default") -> Optional[spotipy.Spotify]:
 
 def get_current_user(sp: spotipy.Spotify) -> Dict[str, Any]:
     user = sp.current_user()
+    images = user.get("images") or []
     return {
         "user_id": user.get("id") or user.get("display_name") or "spotify_user",
         "display_name": user.get("display_name") or user.get("id") or "Spotify User",
         "spotify_url": user.get("external_urls", {}).get("spotify"),
+        "image_url": images[0].get("url") if images and isinstance(images[0], dict) else None,
     }
 
 
@@ -197,6 +199,7 @@ def demo_profile():
         "user_id": "demo_user",
         "display_name": "Demo User",
         "spotify_url": None,
+        "image_url": None,
     }
 
     top_artists = [
