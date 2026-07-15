@@ -630,25 +630,40 @@ def _cc_apply_discover_filters(events, query="", genre="All genres", match_type=
         visible = sorted(visible, key=_d)
     return visible
 
+
 def _cc_limit_visible_events(events, key="discover", page_size=40):
     events = list(events or [])
     total = len(events)
     if total <= page_size:
         return events
+
     sig = f"{key}:{total}:" + "|".join([_cc_event_title(e) for e in events[:5]])
     sig_key = f"{key}_visible_signature"
     limit_key = f"{key}_visible_limit"
+
     if st.session_state.get(sig_key) != sig:
         st.session_state[sig_key] = sig
         st.session_state[limit_key] = page_size
+
     limit = int(st.session_state.get(limit_key, page_size))
     limit = max(page_size, min(limit, total))
     st.caption(f"Showing {limit} of {total} results.")
-    if limit < total:
-        if st.button(f"Load {min(page_size, total - limit)} more", key=f"{key}_load_more_btn"):
-            st.session_state[limit_key] = min(total, limit + page_size)
-            st.rerun()
     return events[:limit]
+
+
+def _cc_render_load_more(total, key="discover", page_size=40):
+    limit_key = f"{key}_visible_limit"
+    limit = int(st.session_state.get(limit_key, page_size))
+    if limit < total:
+        left, center, right = st.columns([1.4, 1, 1.4])
+        with center:
+            if st.button(
+                f"Load {min(page_size, total - limit)} more",
+                key=f"{key}_load_more_btn",
+                use_container_width=True,
+            ):
+                st.session_state[limit_key] = min(total, limit + page_size)
+                st.rerun()
 
 def _cc_sort_saved_first(events, status_by_id=None):
     return sorted(list(events or []), key=lambda e: (_cc_saved_priority_for_event(e, status_by_id), -_cc_score_for_sort(e), _cc_parse_date_for_sort(e)))
@@ -939,6 +954,94 @@ div[class*="st-key-no_"] button:hover {border-color:#f15a52!important;background
 [data-testid="stTabs"] button[role="tab"]{font-weight:850!important;font-size:.92rem!important;padding-left:18px!important;padding-right:18px!important}
 @media(max-width:800px){.hero-feature-grid{grid-template-columns:1fr}.product-profile{align-items:flex-start}.profile-connected{display:none}.top-pick-card{min-height:160px}}
 
+
+/* Public UI refinement */
+.top-pick-card{
+  overflow:hidden;
+  padding:0;
+  min-height:292px;
+  display:flex;
+  flex-direction:column;
+}
+.top-pick-image{
+  width:100%;
+  height:108px;
+  object-fit:cover;
+  display:block;
+  background:linear-gradient(135deg,#f1ebe4,#f7f4ef);
+}
+.top-pick-image-fallback{
+  width:100%;
+  height:108px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:linear-gradient(135deg,#fff0ee,#f5f2ff);
+  color:#ff5954;
+  font-size:.72rem;
+  font-weight:900;
+  letter-spacing:.13em;
+  text-transform:uppercase;
+}
+.top-pick-body{padding:14px 15px 15px;display:flex;flex-direction:column;flex:1}
+.top-pick-reason{
+  margin-top:9px;
+  font-size:.78rem;
+  line-height:1.38;
+  color:#687083;
+  display:-webkit-box;
+  -webkit-line-clamp:2;
+  -webkit-box-orient:vertical;
+  overflow:hidden;
+}
+.recommendation-heading{
+  display:flex;
+  align-items:flex-end;
+  justify-content:space-between;
+  gap:16px;
+  margin:1.15rem 0 .25rem;
+}
+.recommendation-heading-title{
+  font-family:'Bricolage Grotesque',Inter,sans-serif;
+  font-size:1.65rem;
+  font-weight:850;
+  letter-spacing:-.035em;
+  color:var(--ink);
+}
+.recommendation-heading-copy{font-size:.9rem;color:#737b8c;margin-top:3px}
+.recommendation-count{
+  display:inline-flex;
+  border-radius:999px;
+  background:#f5f6fa;
+  border:1px solid #e7eaf1;
+  color:#626a7b;
+  padding:7px 11px;
+  font-size:.78rem;
+  font-weight:850;
+  white-space:nowrap;
+}
+.save-label{
+  margin:.75rem 0 .38rem;
+  color:#8a92a3;
+  font-size:.71rem;
+  font-weight:900;
+  text-transform:uppercase;
+  letter-spacing:.11em;
+}
+.card-action-spacer{height:.2rem}
+div[data-testid="stVerticalBlockBorderWrapper"]{
+  transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}
+div[data-testid="stVerticalBlockBorderWrapper"]:hover{
+  transform:translateY(-2px);
+  box-shadow:0 22px 48px rgba(17,24,39,.095)!important;
+  border-color:#dce0e9!important;
+}
+@media(max-width:900px){
+  .recommendation-heading{align-items:flex-start;flex-direction:column}
+  .top-pick-card{min-height:250px}
+}
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -1053,57 +1156,106 @@ def _unique_pick(candidates: List[Dict[str, Any]], used: set) -> Dict[str, Any] 
     return None
 
 
+
 def render_top_picks(events: List[Dict[str, Any]], session_id: str) -> None:
     events = sorted(_dedupe_events_for_display(events or []), key=lambda e: _cc_event_score(e), reverse=True)
     if not events:
         return
+
     used = set()
-    direct = sorted([e for e in events if int(e.get("has_direct_artist_match") or 0) == 1], key=lambda e: _cc_event_score(e), reverse=True)
-    discovery = sorted([e for e in events if int(e.get("has_direct_artist_match") or 0) == 0], key=lambda e: _cc_event_score(e), reverse=True)
-    night_out = sorted(
-        events,
-        key=lambda e: _cc_event_score(e) * .62 + float(e.get("venue_quality_signal") or 0) * .20 + (12 if _is_weekend_event(e) else 0) + (6 if e.get("min_price") is not None else 0),
+    direct = sorted(
+        [e for e in events if int(e.get("has_direct_artist_match") or 0) == 1],
+        key=lambda e: _cc_event_score(e),
         reverse=True,
     )
+    discovery = sorted(
+        [e for e in events if int(e.get("has_direct_artist_match") or 0) == 0],
+        key=lambda e: _cc_event_score(e),
+        reverse=True,
+    )
+    night_out = sorted(
+        events,
+        key=lambda e: (
+            _cc_event_score(e) * .62
+            + float(e.get("venue_quality_signal") or 0) * .20
+            + (12 if _is_weekend_event(e) else 0)
+            + (6 if e.get("min_price") is not None else 0)
+        ),
+        reverse=True,
+    )
+
     definitions = [
-        ("Best Match", events),
-        ("Direct Artist Match", direct or events),
-        ("Best Discovery", discovery or events),
-        ("Best Night Out", night_out),
+        ("Best match", events),
+        ("Direct artist", direct or events),
+        ("Discovery pick", discovery or events),
+        ("Best night out", night_out),
     ]
+
     picks = []
     for label, pool in definitions:
         pick = _unique_pick(pool, used)
         if pick:
             picks.append((label, pick))
+
     if not picks:
         return
 
-    st.markdown('<div class="top-picks-title">Your Top Picks</div><div class="top-picks-sub">The shows most worth your attention right now.</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="top-picks-title">Your Top Picks</div>'
+        '<div class="top-picks-sub">Four standout shows, each picked for a different reason.</div>',
+        unsafe_allow_html=True,
+    )
+
     cols = st.columns(len(picks))
     for idx, ((label, event), col) in enumerate(zip(picks, cols)):
         with col:
             title = escape(_cc_event_title(event) or "Concert")
             meta = escape(f"{format_when(event)} · {_cc_event_venue(event)}")
+            image_url = event.get("image_url")
+            image_html = (
+                f'<img class="top-pick-image" src="{escape(str(image_url))}" alt="{title}">'
+                if image_url
+                else '<div class="top-pick-image-fallback">Encore pick</div>'
+            )
+            reason = str(
+                event.get("why_artist_match")
+                or event.get("why_recommended")
+                or f"A strong match for your {_cc_display_lane(event)} taste."
+            ).strip()
+            if len(reason) > 145:
+                reason = reason[:142].rstrip() + "…"
+
             st.markdown(
-                f'''<div class="top-pick-card"><div class="top-pick-label">{escape(label)}</div><div class="top-pick-title">{title}</div><div class="top-pick-meta">{meta}</div><div class="top-pick-score">{escape(_cc_match_score_label(event))}</div></div>''',
+                f'''<div class="top-pick-card">
+                    {image_html}
+                    <div class="top-pick-body">
+                      <div class="top-pick-label">{escape(label)}</div>
+                      <div class="top-pick-title">{title}</div>
+                      <div class="top-pick-meta">{meta}</div>
+                      <div class="top-pick-score">{escape(_cc_match_score_label(event))}</div>
+                      <div class="top-pick-reason">{escape(reason)}</div>
+                    </div>
+                </div>''',
                 unsafe_allow_html=True,
             )
-            links = event_links(event)
-            if links:
-                st.link_button("Tickets", links[0], use_container_width=True)
-            if st.button("Plan night", key=f"top_pick_plan_{session_id}_{idx}", use_container_width=True):
-                st.session_state.plan_event_id = event.get("event_id")
-                st.session_state.plan_source_request = "Recommended list"
-                st.toast("Added to Plan a Night")
 
-    with st.popover("Share my top picks"):
-        share_text = "My Encore AI Top Picks\n\n" + "\n".join(
-            f"{i}. {_cc_event_title(event)} — {_cc_event_venue(event)} — {_cc_match_score_label(event)}"
-            for i, (_, event) in enumerate(picks, 1)
-        )
-        st.code(share_text, language=None)
-        st.caption("Use the copy button, then send it to a friend.")
+            action_a, action_b = st.columns(2)
+            links = event_links(event)
+            with action_a:
+                if links:
+                    st.link_button("Tickets", links[0], use_container_width=True)
+                else:
+                    st.button(
+                        "Tickets",
+                        key=f"top_pick_ticket_disabled_{session_id}_{idx}",
+                        disabled=True,
+                        use_container_width=True,
+                    )
+            with action_b:
+                if st.button("Plan", key=f"top_pick_plan_{session_id}_{idx}", use_container_width=True):
+                    st.session_state.plan_event_id = event.get("event_id")
+                    st.session_state.plan_source_request = "Recommended list"
+                    st.toast("Ready in Copilot → Plan a Night")
 
 def render_stats_strip(ranked_count: int, direct_count: int, price_coverage: int, model_active: bool, bundle: Dict[str, Any] | None = None) -> None:
     """V29: cleaner Simple Copilot with request-window aware picks and fewer tabs."""
@@ -1370,12 +1522,12 @@ def reason_tags_html(event):
         tags = [event.get("match_confidence") or "Taste match", event.get("winning_genre_cluster_label") or event.get("genre") or "Music"]
     return "".join([f'<span class="clean-tag">{tag}</span>' for tag in tags[:5] if tag])
 
+
 def render_event_card(event: Dict[str, Any], idx: int, section: str, user, session_id, extra_badge=None):
     event = _cc_add_spotify_fields(dict(event or {}))
-    title = event.get('event_name') or 'Untitled event'
+    title = event.get("event_name") or "Untitled event"
     venue_line = f"{event.get('venue') or 'Venue TBD'} · {event.get('city') or ''}, {event.get('state') or ''}".strip(" ·,")
     when = format_when(event)
-    price_text, price_class = price_label(event)
     lane = _cc_display_lane(event)
     confidence = event.get("match_confidence") or "Taste match"
     why = event.get("why_artist_match") or event.get("why_recommended") or "This event matches your broader listening profile."
@@ -1383,8 +1535,16 @@ def render_event_card(event: Dict[str, Any], idx: int, section: str, user, sessi
     reason_key = f"reason_{section}_{session_id}_{event.get('event_id')}_{idx}"
     links = event_links(event)
 
+    spotify_links = event.get("artist_spotify_urls") or []
+    spotify_url = event.get("spotify_url") or _cc_spotify_url(event)
+    spotify_label = event.get("spotify_label") or _cc_spotify_label(event)
+    if spotify_links and spotify_links[0].get("url"):
+        spotify_url = spotify_links[0].get("url")
+        spotify_label = f"Spotify · {spotify_links[0].get('artist') or 'Artist'}"
+
     with st.container(border=True):
         poster_col, content_col = st.columns([0.18, 0.82], vertical_alignment="top")
+
         with poster_col:
             if event.get("image_url"):
                 st.markdown(
@@ -1396,98 +1556,121 @@ def render_event_card(event: Dict[str, Any], idx: int, section: str, user, sessi
 
         with content_col:
             st.markdown(
-                f"""
-                <div class="card-topline">
-                  <span class="rank-chip">#{idx}</span>
-                  <span class="card-date">{escape(when)}</span>
-                </div>
-                <div class="card-title">{escape(str(title))}</div>
-                <div class="card-venue">{escape(venue_line)}</div>
-                """,
+                f'''<div class="card-topline">
+                      <span class="rank-chip">#{idx}</span>
+                      <span class="card-date">{escape(when)}</span>
+                    </div>
+                    <div class="card-title">{escape(str(title))}</div>
+                    <div class="card-venue">{escape(venue_line)}</div>''',
                 unsafe_allow_html=True,
             )
 
-            spotify_links = event.get("artist_spotify_urls") or []
-            spotify_pill = ""
-            if spotify_links:
-                item = spotify_links[0]
-                if item.get("url"):
-                    spotify_pill = (
-                        f'<a class="spotify-pill" href="{escape(str(item.get("url")))}" target="_blank">'
-                        f'<span class="signal-dot dot-green"></span>Listen on Spotify: {escape(str(item.get("artist") or "Artist"))}</a>'
-                    )
-            if not spotify_pill:
-                _sp_url = event.get('spotify_url') or _cc_spotify_url(event)
-                _sp_label = event.get('spotify_label') or _cc_spotify_label(event)
-                spotify_pill = f'<a class="spotify-pill" href="{escape(str(_sp_url))}" target="_blank"><span class="signal-dot dot-green"></span>{escape(str(_sp_label))}</a>'
-            price_dot = "dot-green" if price_class == "badge-price" else "dot-amber"
-            group_html = f'<span class="signal-pill"><span class="signal-dot dot-blue"></span>{escape(str(extra_badge))}</span>' if extra_badge else ""
-            match_score_html = f'<span class="signal-pill badge-price">{escape(_cc_match_score_label(event))}</span>'
+            group_html = (
+                f'<span class="signal-pill"><span class="signal-dot dot-blue"></span>{escape(str(extra_badge))}</span>'
+                if extra_badge else ""
+            )
             st.markdown(
-                f"""
-                <div class="signal-row">
-                  {match_score_html}
-                  <span class="signal-pill"><span class="signal-dot dot-coral"></span>{escape(str(confidence))}</span>
-                  {group_html}
-                  <span class="signal-pill no-dot">{escape(str(lane))}</span>
-                  {spotify_pill}
-                </div>
-                <div class="why-note">
-                  <div class="why-label">Why it fits</div>
-                  <div class="why-copy">{escape(str((why + ' ' + lane_copy).strip()))}</div>
-                </div>
-                """,
+                f'''<div class="signal-row">
+                      <span class="signal-pill badge-price">{escape(_cc_match_score_label(event))}</span>
+                      <span class="signal-pill"><span class="signal-dot dot-coral"></span>{escape(str(confidence))}</span>
+                      {group_html}
+                      <span class="signal-pill no-dot">{escape(str(lane))}</span>
+                    </div>
+                    <div class="why-note">
+                      <div class="why-label">Why it fits</div>
+                      <div class="why-copy">{escape(str((why + " " + lane_copy).strip()))}</div>
+                    </div>''',
                 unsafe_allow_html=True,
             )
+
             if ADMIN_MODE:
                 with st.popover("Feedback reasons"):
                     st.multiselect(
                         "Pick any that apply",
                         FEEDBACK_REASON_OPTIONS,
                         key=reason_key,
-                        help="Optional, but helpful. It tells the model whether the music match, price, venue, or timing caused your choice.",
+                        help="Optional feedback for model testing.",
                     )
-                    st.caption("Select multiple reasons if useful. The main label is still Want / Maybe / Not a Fit.")
-    
-            action_cols = st.columns([1.0, 0.07, 1.0, 0.75, 1.0, 2.2], vertical_alignment="center")
-            with action_cols[0]:
+
+            primary_actions = st.columns([1.05, 1.05, 1.25])
+            with primary_actions[0]:
                 if links:
                     st.link_button("Tickets →", links[0], type="primary", use_container_width=True)
                 else:
-                    st.button("Tickets →", key=f"tickets_disabled_{section}_{session_id}_{event.get('event_id')}_{idx}", disabled=True, use_container_width=True)
-                try:
-                    st.link_button(event.get('spotify_label') or _cc_spotify_label(event), event.get('spotify_url') or _cc_spotify_url(event), use_container_width=True)
-                except Exception:
-                    pass
-            with action_cols[1]:
-                st.markdown('<div class="action-divider"></div>', unsafe_allow_html=True)
-            with action_cols[2]:
-                if st.button("Want to go", key=f"want_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
-                    save_feedback_action(user, session_id, event, "want_to_go", rank_position=idx, feedback_reasons=_feedback_reason_value(reason_key))
-                    # Want/Maybe should stay visible in Discover. They become playlist badges, not removed cards.
-                    st.toast("Saved as Want to Go")
-                    st.rerun()
-            with action_cols[3]:
-                if st.button("Maybe", key=f"maybe_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
-                    save_feedback_action(user, session_id, event, "maybe", rank_position=idx, feedback_reasons=_feedback_reason_value(reason_key))
-                    # Want/Maybe should stay visible in Discover. They become playlist badges, not removed cards.
-                    st.toast("Saved as Maybe")
-                    st.rerun()
-            with action_cols[4]:
-                if st.button("Not for me", key=f"no_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
-                    save_feedback_action(user, session_id, event, "not_for_me", rank_position=idx, feedback_reasons=_feedback_reason_value(reason_key))
-                    st.session_state.hidden_event_ids.add(str(event.get("event_id")))
-                    st.toast("Hidden as Not a Fit")
-                    st.rerun()
-            with action_cols[5]:
-                if st.button("Plan night", key=f"plan_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
+                    st.button(
+                        "Tickets →",
+                        key=f"tickets_disabled_{section}_{session_id}_{event.get('event_id')}_{idx}",
+                        disabled=True,
+                        use_container_width=True,
+                    )
+
+            with primary_actions[1]:
+                if st.button(
+                    "Plan night",
+                    key=f"plan_{section}_{session_id}_{event.get('event_id')}_{idx}",
+                    use_container_width=True,
+                ):
                     st.session_state.plan_event_id = event.get("event_id")
                     st.session_state.plan_source_request = "Recommended list"
-                    st.toast("Added to Plan a Night")
-                with st.popover("Share"):
-                    st.code(_share_event_text(event), language=None)
-            if ADMIN_MODE:
-                st.markdown('<div class="action-hint">Tickets opens directly. Feedback updates the personal ranker when you retrain it.</div>', unsafe_allow_html=True)
+                    st.toast("Ready in Copilot → Plan a Night")
+
+            with primary_actions[2]:
+                st.link_button(spotify_label, spotify_url, use_container_width=True)
+
+            st.markdown('<div class="save-label">Save to your playlist</div>', unsafe_allow_html=True)
+            save_actions = st.columns(3)
+
+            with save_actions[0]:
+                if st.button(
+                    "Want to go",
+                    key=f"want_{section}_{session_id}_{event.get('event_id')}_{idx}",
+                    use_container_width=True,
+                ):
+                    save_feedback_action(
+                        user,
+                        session_id,
+                        event,
+                        "want_to_go",
+                        rank_position=idx,
+                        feedback_reasons=_feedback_reason_value(reason_key),
+                    )
+                    st.toast("Saved to Want")
+                    st.rerun()
+
+            with save_actions[1]:
+                if st.button(
+                    "Maybe",
+                    key=f"maybe_{section}_{session_id}_{event.get('event_id')}_{idx}",
+                    use_container_width=True,
+                ):
+                    save_feedback_action(
+                        user,
+                        session_id,
+                        event,
+                        "maybe",
+                        rank_position=idx,
+                        feedback_reasons=_feedback_reason_value(reason_key),
+                    )
+                    st.toast("Saved to Maybe")
+                    st.rerun()
+
+            with save_actions[2]:
+                if st.button(
+                    "Not for me",
+                    key=f"no_{section}_{session_id}_{event.get('event_id')}_{idx}",
+                    use_container_width=True,
+                ):
+                    save_feedback_action(
+                        user,
+                        session_id,
+                        event,
+                        "not_for_me",
+                        rank_position=idx,
+                        feedback_reasons=_feedback_reason_value(reason_key),
+                    )
+                    st.session_state.hidden_event_ids.add(str(event.get("event_id")))
+                    st.toast("Hidden from recommendations")
+                    st.rerun()
 
 # ---------------- Sidebar ----------------
 with st.sidebar:
@@ -1840,12 +2023,17 @@ with main_tabs[0]:
     genre_options = ["All genres"] + sorted({str(_cc_genre(e)) for e in base_events if _cc_genre(e)})
 
     st.markdown(
-        f'<div class="discover-title">Personalized concerts for {escape(str(user.get("display_name") or "you"))}</div>'
-        '<div class="discover-copy">Use the sidebar to load shows. Then search, filter, save, and plan from the full loaded list.</div>',
+        f'''<div class="recommendation-heading">
+              <div>
+                <div class="recommendation-heading-title">All recommendations</div>
+                <div class="recommendation-heading-copy">Browse the full ranked list, narrow it down, or save a show for later.</div>
+              </div>
+              <div class="recommendation-count">{len(base_events)} shows ranked</div>
+            </div>''',
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="quick-filter-title">Explore your recommendations</div>', unsafe_allow_html=True)
+    st.markdown('<div class="quick-filter-title">Browse by fit</div>', unsafe_allow_html=True)
     quick_filter = st.radio(
         "Explore",
         ["Best for me", "This weekend", "Direct matches", "New discoveries", "Date night", "Under $50", "Intimate venues"],
@@ -1859,7 +2047,7 @@ with main_tabs[0]:
     display_venue = "All venues"
     discover_genre = "All genres"
     show_hidden = False
-    with st.expander("Search and filters"):
+    with st.expander("Search & filters", expanded=False):
         f_search, f_city, f_venue, f_genre, f_hidden = st.columns([2.35, .95, 1.15, 1.05, .65], vertical_alignment="bottom")
         with f_search:
             discover_search_text = st.text_input("Search artist, show, genre, venue", placeholder="Type an artist, venue, or genre", key="discover_search_text_v40")
@@ -1896,6 +2084,7 @@ with main_tabs[0]:
         caption = f"Clean test: showing {len(visible)} of {len(base_events)} loaded shows. Saved history is ignored; current ranking score only."
 
     visible = _dedupe_events_for_display(visible)
+    visible_total = len(visible)
     visible = _cc_limit_visible_events(visible, key=f"discover_{session_id}", page_size=display_page_size)
 
     if not visible:
@@ -1904,6 +2093,12 @@ with main_tabs[0]:
         saved_badge = preference_label(status_by_id.get(str(event.get("event_id")))) if use_saved_history_toggle else None
         extra = saved_badge or event.get("group_fit_label")
         render_event_card(event, index, "feed", user, session_id, extra)
+
+    _cc_render_load_more(
+        visible_total,
+        key=f"discover_{session_id}",
+        page_size=display_page_size,
+    )
 
 
 # ---------------- Playlist ----------------
