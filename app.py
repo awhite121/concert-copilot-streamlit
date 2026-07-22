@@ -74,6 +74,11 @@ def _secret_bool(name: str, default: bool = False) -> bool:
 ADMIN_MODE = _secret_bool("ADMIN_MODE", False)
 PUBLIC_DEMO_MODE = _secret_bool("PUBLIC_DEMO_MODE", True) and not ADMIN_MODE
 
+# Show-all migration: discard pagination limits left by older sessions.
+for _key in list(st.session_state.keys()):
+    if str(_key).endswith("_visible_limit") or str(_key).endswith("_visible_count"):
+        st.session_state.pop(_key, None)
+
 
 # === HOTFIX V34: display dedupe + saved-memory helpers ===
 def _cc_clean_text(v):
@@ -696,38 +701,19 @@ def _cc_apply_discover_filters(events, query="", genre="All genres", match_type=
 
 
 def _cc_limit_visible_events(events, key="discover", page_size=40):
+    """Return every currently loaded and filtered show.
+
+    Feedback can change ordering or hidden-state. The previous pagination
+    signature treated that as a new result set and reset Discover to 20.
+    """
     events = list(events or [])
-    total = len(events)
-    if total <= page_size:
-        return events
-
-    sig = f"{key}:{total}:" + "|".join([_cc_event_title(e) for e in events[:5]])
-    sig_key = f"{key}_visible_signature"
-    limit_key = f"{key}_visible_limit"
-
-    if st.session_state.get(sig_key) != sig:
-        st.session_state[sig_key] = sig
-        st.session_state[limit_key] = page_size
-
-    limit = int(st.session_state.get(limit_key, page_size))
-    limit = max(page_size, min(limit, total))
-    st.caption(f"Showing {limit} of {total} results.")
-    return events[:limit]
-
+    if events:
+        st.caption(f"Showing all {len(events)} results.")
+    return events
 
 def _cc_render_load_more(total, key="discover", page_size=40):
-    limit_key = f"{key}_visible_limit"
-    limit = int(st.session_state.get(limit_key, page_size))
-    if limit < total:
-        left, center, right = st.columns([1.4, 1, 1.4])
-        with center:
-            if st.button(
-                f"Load {min(page_size, total - limit)} more",
-                key=f"{key}_load_more_btn",
-                use_container_width=True,
-            ):
-                st.session_state[limit_key] = min(total, limit + page_size)
-                st.rerun()
+    """Discover displays the complete loaded list, so pagination is disabled."""
+    return None
 
 def _cc_sort_saved_first(events, status_by_id=None):
     return sorted(list(events or []), key=lambda e: (_cc_saved_priority_for_event(e, status_by_id), -_cc_score_for_sort(e), _cc_parse_date_for_sort(e)))
@@ -1695,19 +1681,16 @@ def render_event_card(event: Dict[str, Any], idx: int, section: str, user, sessi
                 if st.button("Want to go", key=f"want_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
                     save_feedback_action(user, session_id, event, "want_to_go", rank_position=idx, feedback_reasons=_feedback_reason_value(reason_key))
                     st.toast("Saved to Want")
-                    st.rerun()
+
             with save_actions[1]:
                 if st.button("Maybe", key=f"maybe_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
                     save_feedback_action(user, session_id, event, "maybe", rank_position=idx, feedback_reasons=_feedback_reason_value(reason_key))
                     st.toast("Saved to Maybe")
-                    st.rerun()
+
             with save_actions[2]:
                 if st.button("Not for me", key=f"no_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
                     save_feedback_action(user, session_id, event, "not_for_me", rank_position=idx, feedback_reasons=_feedback_reason_value(reason_key))
-                    st.session_state.hidden_event_ids.add(str(event.get("event_id")))
                     st.toast("Hidden from recommendations")
-                    st.rerun()
-
 # ---------------- Sidebar ----------------
 with st.sidebar:
     st.header("Find concerts")
