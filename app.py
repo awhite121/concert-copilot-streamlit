@@ -74,10 +74,12 @@ def _secret_bool(name: str, default: bool = False) -> bool:
 ADMIN_MODE = _secret_bool("ADMIN_MODE", False)
 PUBLIC_DEMO_MODE = _secret_bool("PUBLIC_DEMO_MODE", True) and not ADMIN_MODE
 
-# Show-all migration: discard pagination limits left by older sessions.
-for _key in list(st.session_state.keys()):
-    if str(_key).endswith("_visible_limit") or str(_key).endswith("_visible_count"):
-        st.session_state.pop(_key, None)
+# Clear obsolete pagination state only once per browser session.
+if not st.session_state.get("_encore_pagination_migrated"):
+    for _key in list(st.session_state.keys()):
+        if str(_key).endswith("_visible_count"):
+            st.session_state.pop(_key, None)
+    st.session_state["_encore_pagination_migrated"] = True
 
 
 # === HOTFIX V34: display dedupe + saved-memory helpers ===
@@ -830,7 +832,7 @@ for key, default in {
         st.session_state[key] = default
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=2700, show_spinner=False)
 def cached_event_search(
     city,
     state,
@@ -1723,22 +1725,19 @@ with st.sidebar:
         index=0,
     )
 
-    speed_profiles = {
-        "Fast demo": {"size": 80, "ticketmaster_pages": 1, "seatgeek_pages": 1, "top_artist_search_count": 10, "price_enrichment_limit": 8, "display_page_size": 20},
-        "Balanced": {"size": 120, "ticketmaster_pages": 2, "seatgeek_pages": 2, "top_artist_search_count": 15, "price_enrichment_limit": 15, "display_page_size": 30},
-        "Deep search": {"size": 200, "ticketmaster_pages": 5, "seatgeek_pages": 5, "top_artist_search_count": 30, "price_enrichment_limit": 40, "display_page_size": 40},
+    # Always use complete coverage.
+    # Speed comes from caching, parallel requests, and rendering only 20 cards first.
+    search_speed = "Full coverage"
+    speed_config = {
+        "size": 250,
+        "ticketmaster_pages": 5,
+        "seatgeek_pages": 5,
+        "top_artist_search_count": 40,
+        "price_enrichment_limit": 16,
+        "display_page_size": 20,
     }
-
     if ADMIN_MODE:
-        search_speed = st.selectbox(
-            "Search depth",
-            ["Fast demo", "Balanced", "Deep search"],
-            index=0,
-            help="Controls API depth and price enrichment.",
-        )
-    else:
-        search_speed = "Fast demo"
-    speed_config = speed_profiles[search_speed]
+        st.caption("Full coverage is always enabled.")
 
     group_mode = False
     group_name = "Friend"

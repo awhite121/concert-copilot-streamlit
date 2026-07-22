@@ -228,7 +228,7 @@ def _enrich_prices(events, city, state_code, targeted_artist_names, limit=24):
         return event, search_price_for_event(event, city, state_code)
 
     enriched_count = 0
-    with ThreadPoolExecutor(max_workers=min(5, len(selected))) as executor:
+    with ThreadPoolExecutor(max_workers=min(8, len(selected))) as executor:
         futures = [executor.submit(fetch, event) for event in selected]
         for future in as_completed(futures):
             try:
@@ -313,21 +313,44 @@ def search_all_sources(
             record("Songkick", "broad_city", 0, error=str(exc))
 
     if smart_artist_search and targeted_artist_names:
-        for artist in targeted_artist_names:
-            if use_ticketmaster:
-                try:
-                    batch = search_ticketmaster(city, state_code, country_code, radius, min(size, 100), artist, min(ticketmaster_pages, 2), start_date, end_date, venue_name, retrieval_method=f"artist_target:{artist}")
-                    raw.extend(batch)
-                    record("Ticketmaster", "artist_target", len(batch), artist=artist)
-                except Exception as exc:
-                    record("Ticketmaster", "artist_target", 0, artist=artist, error=str(exc))
-            if use_seatgeek:
-                try:
-                    batch = search_seatgeek(city, state_code, country_code, radius, min(size, 100), artist, start_date, end_date, venue_name, pages=1, retrieval_method=f"artist_target:{artist}")
-                    raw.extend(batch)
-                    record("SeatGeek", "artist_target", len(batch), artist=artist)
-                except Exception as exc:
-                    record("SeatGeek", "artist_target", 0, artist=artist, error=str(exc))
+        artist_tasks = []
+
+        def fetch_artist_source(source_name, artist):
+            try:
+                if source_name == "Ticketmaster":
+                    batch = search_ticketmaster(
+                        city, state_code, country_code, radius, min(size, 100),
+                        artist, min(ticketmaster_pages, 2), start_date, end_date,
+                        venue_name, retrieval_method=f"artist_target:{artist}"
+                    )
+                else:
+                    batch = search_seatgeek(
+                        city, state_code, country_code, radius, min(size, 100),
+                        artist, start_date, end_date, venue_name, pages=1,
+                        retrieval_method=f"artist_target:{artist}"
+                    )
+                return source_name, artist, batch, None
+            except Exception as exc:
+                return source_name, artist, [], str(exc)
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            for artist in targeted_artist_names:
+                if use_ticketmaster:
+                    artist_tasks.append(
+                        executor.submit(fetch_artist_source, "Ticketmaster", artist)
+                    )
+                if use_seatgeek:
+                    artist_tasks.append(
+                        executor.submit(fetch_artist_source, "SeatGeek", artist)
+                    )
+
+            for future in as_completed(artist_tasks):
+                source_name, artist, batch, error = future.result()
+                raw.extend(batch or [])
+                record(
+                    source_name, "artist_target", len(batch or []),
+                    artist=artist, error=error
+                )
 
     raw_filtered = _post_filter(raw, start_date=start_date, end_date=end_date, venue_name=venue_name)
     merged = merge_events(raw_filtered)
