@@ -2077,94 +2077,305 @@ def render_playlist_month_calendar(playlist_df, user, session_id):
     if playlist_df is None or playlist_df.empty:
         return
 
-    items = []
-    undated = 0
+    def _normalized(value):
+        return "".join(
+            character.lower()
+            for character in str(value or "").strip()
+            if character.isalnum()
+        )
+
+    unique = {}
+    undated_count = 0
+
     for row in playlist_df.to_dict(orient="records"):
         event = _cc_add_spotify_fields(interaction_row_to_event(row))
-        raw_date = event.get("date") or event.get("event_date") or row.get("event_date") or row.get("date")
+        raw_date = (
+            event.get("date")
+            or event.get("event_date")
+            or row.get("event_date")
+            or row.get("date")
+        )
         parsed = pd.to_datetime(raw_date, errors="coerce")
-        if pd.isna(parsed):
-            undated += 1
-            continue
-        items.append({"event": event, "date": parsed.date(), "action": str(row.get("action") or "")})
 
-    if not items:
-        st.info("Saved shows with confirmed dates will appear on the monthly calendar.")
+        if pd.isna(parsed):
+            undated_count += 1
+            continue
+
+        title = event.get("event_name") or event.get("title") or "Concert"
+        raw_time = (
+            event.get("event_time")
+            or event.get("time")
+            or row.get("event_time")
+            or ""
+        )
+        city = event.get("city") or row.get("city") or ""
+        dedupe_key = (
+            _normalized(title),
+            parsed.date().isoformat(),
+            str(raw_time)[:5],
+            _normalized(city),
+        )
+
+        candidate = {
+            "event": event,
+            "row": row,
+            "date": parsed.date(),
+            "action": str(row.get("action") or ""),
+            "created_at": str(row.get("created_at") or ""),
+        }
+
+        previous = unique.get(dedupe_key)
+        if previous is None:
+            unique[dedupe_key] = candidate
+            continue
+
+        previous_links = event_links(previous["event"])
+        candidate_links = event_links(candidate["event"])
+        candidate_quality = (
+            1 if candidate_links else 0,
+            1 if candidate["event"].get("image_url") else 0,
+            candidate["created_at"],
+        )
+        previous_quality = (
+            1 if previous_links else 0,
+            1 if previous["event"].get("image_url") else 0,
+            previous["created_at"],
+        )
+        if candidate_quality > previous_quality:
+            unique[dedupe_key] = candidate
+
+    dated_items = sorted(
+        unique.values(),
+        key=lambda item: (
+            item["date"],
+            str(item["event"].get("event_time") or item["event"].get("time") or ""),
+        ),
+    )
+
+    if not dated_items:
+        st.info("Saved shows with confirmed dates will appear on your calendar.")
         return
 
     st.markdown(
-        '<div class="playlist-calendar-hero"><div class="playlist-calendar-title">Your concert calendar</div>'
-        '<div class="playlist-calendar-copy">Every saved show is organized by month and day. Open a concert to view tickets, plan the night, or add it to your device calendar.</div></div>',
+        '<div class="playlist-calendar-hero">'
+        '<div class="playlist-calendar-title">Your concert calendar</div>'
+        '<div class="playlist-calendar-copy">'
+        'Track every saved concert by month and day. Click a concert to open its ticket or event page.'
+        '</div></div>',
         unsafe_allow_html=True,
     )
 
-    months = sorted({(item["date"].year, item["date"].month) for item in items})
-    labels = {key: date(key[0], key[1], 1).strftime("%B %Y") for key in months}
-    current = (date.today().year, date.today().month)
-    default_index = len(months) - 1
-    for index, key in enumerate(months):
-        if key >= current:
-            default_index = index
+    month_keys = sorted({
+        (item["date"].year, item["date"].month)
+        for item in dated_items
+    })
+    month_labels = {
+        key: date(key[0], key[1], 1).strftime("%B %Y")
+        for key in month_keys
+    }
+
+    current_key = (date.today().year, date.today().month)
+    default_key = month_keys[-1]
+    for key in month_keys:
+        if key >= current_key:
+            default_key = key
             break
 
-    cities = sorted({str(item["event"].get("city") or "").strip() for item in items if str(item["event"].get("city") or "").strip()})
-    c1, c2, c3 = st.columns([1.25, 1, 1])
-    with c1:
-        month_label = st.selectbox("Month", [labels[key] for key in months], index=default_index, key="playlist_calendar_month")
-    with c2:
-        status = st.selectbox("Status", ["All saved", "Want", "Maybe", "Don't go"], key="playlist_calendar_status")
-    with c3:
-        city = st.selectbox("City", ["All cities"] + cities, key="playlist_calendar_city")
+    state_key = "playlist_calendar_selected_month_v2"
+    if st.session_state.get(state_key) not in month_keys:
+        st.session_state[state_key] = default_key
 
-    selected_key = next(key for key in months if labels[key] == month_label)
+    selected_index = month_keys.index(st.session_state[state_key])
+    nav_left, month_column, nav_right = st.columns([0.45, 2.1, 0.45])
+
+    with nav_left:
+        if st.button(
+            "←",
+            key="playlist_calendar_previous_month_v2",
+            disabled=selected_index == 0,
+            use_container_width=True,
+        ):
+            st.session_state[state_key] = month_keys[selected_index - 1]
+            st.rerun(scope="fragment")
+
+    with month_column:
+        chosen_label = st.selectbox(
+            "Month",
+            [month_labels[key] for key in month_keys],
+            index=selected_index,
+            key="playlist_calendar_month_select_v2",
+        )
+        chosen_key = next(
+            key for key in month_keys
+            if month_labels[key] == chosen_label
+        )
+        if chosen_key != st.session_state[state_key]:
+            st.session_state[state_key] = chosen_key
+            st.rerun(scope="fragment")
+
+    with nav_right:
+        if st.button(
+            "→",
+            key="playlist_calendar_next_month_v2",
+            disabled=selected_index == len(month_keys) - 1,
+            use_container_width=True,
+        ):
+            st.session_state[state_key] = month_keys[selected_index + 1]
+            st.rerun(scope="fragment")
+
+    selected_key = st.session_state[state_key]
     year, month = selected_key
-    status_map = {"Want": "want_to_go", "Maybe": "maybe", "Don't go": "not_for_me"}
-    month_items = [item for item in items if (item["date"].year, item["date"].month) == selected_key]
-    if status != "All saved":
-        month_items = [item for item in month_items if item["action"] == status_map[status]]
-    if city != "All cities":
-        month_items = [item for item in month_items if str(item["event"].get("city") or "") == city]
+
+    city_values = sorted({
+        str(item["event"].get("city") or "").strip()
+        for item in dated_items
+        if str(item["event"].get("city") or "").strip()
+    })
+
+    status_col, city_col = st.columns(2)
+    with status_col:
+        status_filter = st.selectbox(
+            "Show",
+            [
+                "Upcoming Want + Maybe",
+                "Want",
+                "Maybe",
+                "All saved",
+                "Don't go",
+            ],
+            index=0,
+            key="playlist_calendar_status_v2",
+        )
+    with city_col:
+        city_filter = st.selectbox(
+            "City",
+            ["All cities"] + city_values,
+            index=0,
+            key="playlist_calendar_city_v2",
+        )
+
+    month_items = [
+        item for item in dated_items
+        if (item["date"].year, item["date"].month) == selected_key
+    ]
+
+    if status_filter == "Upcoming Want + Maybe":
+        month_items = [
+            item for item in month_items
+            if item["action"] in {"want_to_go", "maybe"}
+        ]
+    elif status_filter == "Want":
+        month_items = [
+            item for item in month_items
+            if item["action"] == "want_to_go"
+        ]
+    elif status_filter == "Maybe":
+        month_items = [
+            item for item in month_items
+            if item["action"] == "maybe"
+        ]
+    elif status_filter == "Don't go":
+        month_items = [
+            item for item in month_items
+            if item["action"] == "not_for_me"
+        ]
+
+    if city_filter != "All cities":
+        month_items = [
+            item for item in month_items
+            if str(item["event"].get("city") or "") == city_filter
+        ]
+
+    want_count = sum(item["action"] == "want_to_go" for item in month_items)
+    maybe_count = sum(item["action"] == "maybe" for item in month_items)
+    no_count = sum(item["action"] == "not_for_me" for item in month_items)
 
     metrics = st.columns(4)
     metrics[0].metric("Shows this month", len(month_items))
-    metrics[1].metric("Want", sum(item["action"] == "want_to_go" for item in month_items))
-    metrics[2].metric("Maybe", sum(item["action"] == "maybe" for item in month_items))
-    metrics[3].metric("Don't go", sum(item["action"] == "not_for_me" for item in month_items))
+    metrics[1].metric("Want", want_count)
+    metrics[2].metric("Maybe", maybe_count)
+    metrics[3].metric("Don't go", no_count)
 
-    st.markdown('<div class="playlist-calendar-legend">★ Want &nbsp;&nbsp;&nbsp; ● Maybe &nbsp;&nbsp;&nbsp; × Don’t go</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="playlist-calendar-legend">'
+        '★ Want &nbsp;&nbsp;&nbsp; ● Maybe &nbsp;&nbsp;&nbsp; × Don’t go'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
-    headers = st.columns(7)
-    for col, label in zip(headers, ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]):
-        with col:
-            st.markdown(f'<div class="playlist-calendar-weekday">{label}</div>', unsafe_allow_html=True)
+    weekday_columns = st.columns(7)
+    for column, label in zip(
+        weekday_columns,
+        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    ):
+        with column:
+            st.markdown(
+                f'<div class="playlist-calendar-weekday">{label}</div>',
+                unsafe_allow_html=True,
+            )
 
-    for week_index, week in enumerate(_calendar.Calendar(firstweekday=0).monthdayscalendar(year, month)):
-        day_cols = st.columns(7)
+    for week_index, week in enumerate(
+        _calendar.Calendar(firstweekday=0).monthdayscalendar(year, month)
+    ):
+        day_columns = st.columns(7)
+
         for weekday_index, day_number in enumerate(week):
-            with day_cols[weekday_index]:
+            with day_columns[weekday_index]:
                 with st.container(border=True):
                     if day_number == 0:
                         st.write("")
                         st.write("")
                         continue
-                    st.markdown(f'<div class="playlist-calendar-day">{day_number}</div>', unsafe_allow_html=True)
-                    day_items = sorted(
-                        [item for item in month_items if item["date"].day == day_number],
-                        key=lambda item: str(item["event"].get("event_time") or item["event"].get("time") or ""),
+
+                    st.markdown(
+                        f'<div class="playlist-calendar-day">{day_number}</div>',
+                        unsafe_allow_html=True,
                     )
+
+                    day_items = [
+                        item for item in month_items
+                        if item["date"].day == day_number
+                    ]
+
                     if not day_items:
                         st.caption("—")
                         continue
+
                     for event_index, item in enumerate(day_items):
                         event = item["event"]
-                        icon = "★" if item["action"] == "want_to_go" else ("●" if item["action"] == "maybe" else "×")
-                        title = str(event.get("event_name") or event.get("title") or "Concert")
-                        short_title = title if len(title) <= 22 else title[:20].rstrip() + "…"
-                        raw_time = str(event.get("event_time") or event.get("time") or "").strip()
+                        action = item["action"]
+
+                        icon = (
+                            "★" if action == "want_to_go"
+                            else "●" if action == "maybe"
+                            else "×"
+                        )
+
+                        title = str(
+                            event.get("event_name")
+                            or event.get("title")
+                            or "Concert"
+                        )
+                        compact_title = (
+                            title
+                            if len(title) <= 26
+                            else title[:24].rstrip() + "…"
+                        )
+
+                        raw_time = str(
+                            event.get("event_time")
+                            or event.get("time")
+                            or ""
+                        ).strip()
                         if "T" in raw_time:
                             raw_time = raw_time.split("T")[-1]
                         raw_time = raw_time[:5]
-                        parsed_time = pd.to_datetime(raw_time, format="%H:%M", errors="coerce")
+
+                        parsed_time = pd.to_datetime(
+                            raw_time,
+                            format="%H:%M",
+                            errors="coerce",
+                        )
                         if pd.isna(parsed_time):
                             time_label = raw_time
                         else:
@@ -2172,40 +2383,66 @@ def render_playlist_month_calendar(playlist_df, user, session_id):
                                 time_label = parsed_time.strftime("%-I:%M %p")
                             except Exception:
                                 time_label = parsed_time.strftime("%I:%M %p").lstrip("0")
-                        event_key = str(event.get("event_id") or f"{year}_{month}_{day_number}_{event_index}")
-                        if st.button(f"{icon} {time_label} {short_title}".strip(), key=f"playlist_cal_{week_index}_{weekday_index}_{event_key}", use_container_width=True):
-                            st.session_state.playlist_calendar_selected_event = event
-                            st.rerun(scope="fragment")
 
-    selected = st.session_state.get("playlist_calendar_selected_event")
-    if selected:
-        selected_date = pd.to_datetime(selected.get("date") or selected.get("event_date"), errors="coerce")
-        if not pd.isna(selected_date) and (selected_date.year, selected_date.month) == selected_key:
-            title = str(selected.get("event_name") or selected.get("title") or "Concert")
-            venue = str(selected.get("venue") or "Venue TBD")
-            st.markdown(f'<div class="playlist-calendar-selected"><b>{escape(title)}</b><br><span>{escape(format_when(selected))} · {escape(venue)}</span></div>', unsafe_allow_html=True)
-            links = event_links(selected)
-            actions = st.columns(4)
-            with actions[0]:
-                if links:
-                    st.link_button("Tickets", links[0], use_container_width=True)
-                else:
-                    st.button("Tickets", disabled=True, key="playlist_cal_no_tickets", use_container_width=True)
-            with actions[1]:
-                if st.button("Plan night", key="playlist_cal_plan", use_container_width=True):
-                    st.session_state.plan_event_id = selected.get("event_id")
-                    st.session_state.plan_event_payload = selected
-                    st.session_state.plan_source_request = "Playlist calendar"
-                    st.toast("Ready in Copilot → Plan a Night")
-            with actions[2]:
-                st.download_button("Add to calendar", data=build_calendar_ics(selected), file_name=_cc_calendar_filename(selected), mime="text/calendar", key="playlist_cal_download", use_container_width=True)
-            with actions[3]:
-                st.link_button(_cc_spotify_label(selected), _cc_spotify_url(selected), use_container_width=True)
+                        label = f"{icon} {time_label} {compact_title}".strip()
+                        links = event_links(event)
 
-    if undated:
-        st.caption(f"{undated} saved show{'s' if undated != 1 else ''} did not include a confirmed date and remain in the list below.")
+                        if links:
+                            st.link_button(
+                                label,
+                                links[0],
+                                use_container_width=True,
+                            )
+                        else:
+                            stable_key = (
+                                str(event.get("event_id") or "")
+                                or f"{year}_{month}_{day_number}_{event_index}"
+                            )
+                            if st.button(
+                                label,
+                                key=f"playlist_calendar_no_link_{stable_key}",
+                                use_container_width=True,
+                            ):
+                                st.session_state.playlist_calendar_selected_event_v2 = event
+                                st.rerun(scope="fragment")
 
-    st.markdown('<div class="playlist-list-heading">Saved show list</div>', unsafe_allow_html=True)
+                        venue = str(event.get("venue") or "").strip()
+                        if venue:
+                            st.caption(
+                                venue
+                                if len(venue) <= 28
+                                else venue[:26].rstrip() + "…"
+                            )
+
+    selected_event = st.session_state.get(
+        "playlist_calendar_selected_event_v2"
+    )
+    if selected_event:
+        selected_title = escape(str(selected_event.get("event_name") or "Concert"))
+        selected_when = escape(format_when(selected_event))
+        selected_venue = escape(str(selected_event.get("venue") or "Venue TBD"))
+        st.markdown(
+            (
+                '<div class="playlist-calendar-selected">'
+                f'<b>{selected_title}</b><br>'
+                f'<span>{selected_when} · {selected_venue}</span>'
+                '</div>'
+            ),
+            unsafe_allow_html=True,
+        )
+
+    if undated_count:
+        st.caption(
+            f"{undated_count} saved show"
+            f"{'s' if undated_count != 1 else ''} "
+            "without a confirmed event date remain available in the list below."
+        )
+
+    st.markdown(
+        '<div class="playlist-list-heading">Saved show list</div>',
+        unsafe_allow_html=True,
+    )
+
 
 # ---------------- Discover ----------------
 with main_tabs[0]:

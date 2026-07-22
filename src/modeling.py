@@ -330,15 +330,64 @@ def train_feedback_model(min_rows: int = 60) -> Dict[str, Any]:
     }
 
 
-def load_feedback_model(variant: str = "current") -> Optional[Dict[str, Any]]:
-    path = previous_model_path() if variant == "previous" else model_path()
+def _safe_load_bundle(path: Path) -> Optional[Dict[str, Any]]:
     if not path.exists():
         return None
     try:
-        return joblib.load(path)
+        bundle = joblib.load(path)
+        return bundle if isinstance(bundle, dict) and bundle.get("model") is not None else None
     except Exception:
         return None
 
+
+def load_feedback_model(variant: str = "current") -> Optional[Dict[str, Any]]:
+    if variant == "previous":
+        return _safe_load_bundle(previous_model_path())
+
+    configured = model_path()
+    candidates = [
+        configured,
+        configured.parent / "xgb_feedback_reranker.joblib",
+        configured.parent / "xgb_feedback_ranker.joblib",
+    ]
+    candidates.extend(history_dir().glob("*.joblib"))
+
+    choices = []
+    seen = set()
+
+    for candidate in candidates:
+        try:
+            candidate = candidate.resolve()
+        except Exception:
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+
+        bundle = _safe_load_bundle(candidate)
+        if bundle is None:
+            continue
+
+        is_current_file = candidate.name in {
+            configured.name,
+            "xgb_feedback_reranker.joblib",
+            "xgb_feedback_ranker.joblib",
+        }
+        if not (bool(bundle.get("promoted")) or is_current_file):
+            continue
+
+        choices.append((
+            int(bundle.get("n_rows") or 0),
+            str(bundle.get("trained_at") or ""),
+            candidate.stat().st_mtime,
+            bundle,
+        ))
+
+    if not choices:
+        return None
+
+    choices.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+    return choices[0][3]
 
 def predict_feedback_scores(feature_df: pd.DataFrame, variant: str = "current") -> np.ndarray:
     bundle = load_feedback_model(variant)
