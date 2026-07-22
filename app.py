@@ -1594,8 +1594,29 @@ def reason_tags_html(event):
 
 
 
+@st.fragment
 def render_event_card(event: Dict[str, Any], idx: int, section: str, user, session_id, extra_badge=None):
     event = _cc_add_spotify_fields(dict(event or {}))
+    event_id = str(event.get("event_id") or "")
+    hidden_now = st.session_state.setdefault("hidden_event_ids", set())
+    if event_id and event_id in hidden_now:
+        return
+
+    instant_overrides = st.session_state.setdefault("instant_preference_overrides", {})
+    instant_action = instant_overrides.get(event_id)
+    if instant_action == "want_to_go":
+        extra_badge = "Saved · Want"
+    elif instant_action == "maybe":
+        extra_badge = "Saved · Maybe"
+    event_id = str(event.get("event_id") or "")
+    preference_overrides = st.session_state.setdefault("preference_overrides", {})
+    if event_id and event_id in st.session_state.get("hidden_event_ids", set()):
+        return
+    override_action = preference_overrides.get(event_id)
+    if override_action == "want_to_go":
+        extra_badge = "Saved · Want"
+    elif override_action == "maybe":
+        extra_badge = "Saved · Maybe"
     title = event.get("event_name") or "Untitled event"
     venue_line = f"{event.get('venue') or 'Venue TBD'} · {event.get('city') or ''}, {event.get('state') or ''}".strip(" ·,")
     when = format_when(event)
@@ -1682,17 +1703,26 @@ def render_event_card(event: Dict[str, Any], idx: int, section: str, user, sessi
             with save_actions[0]:
                 if st.button("Want to go", key=f"want_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
                     save_feedback_action(user, session_id, event, "want_to_go", rank_position=idx, feedback_reasons=_feedback_reason_value(reason_key))
+                    st.session_state.preference_overrides[event_id] = "want_to_go"
+                    st.session_state.hidden_event_ids.discard(event_id)
                     st.toast("Saved to Want")
+                    st.rerun(scope="fragment")
 
             with save_actions[1]:
                 if st.button("Maybe", key=f"maybe_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
                     save_feedback_action(user, session_id, event, "maybe", rank_position=idx, feedback_reasons=_feedback_reason_value(reason_key))
+                    st.session_state.preference_overrides[event_id] = "maybe"
+                    st.session_state.hidden_event_ids.discard(event_id)
                     st.toast("Saved to Maybe")
+                    st.rerun(scope="fragment")
 
             with save_actions[2]:
                 if st.button("Not for me", key=f"no_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
                     save_feedback_action(user, session_id, event, "not_for_me", rank_position=idx, feedback_reasons=_feedback_reason_value(reason_key))
+                    st.session_state.preference_overrides[event_id] = "not_for_me"
+                    st.session_state.hidden_event_ids.add(event_id)
                     st.toast("Hidden from recommendations")
+                    st.rerun(scope="fragment")
 # ---------------- Sidebar ----------------
 with st.sidebar:
     st.header("Find concerts")
@@ -1757,7 +1787,7 @@ with st.sidebar:
     if ADMIN_MODE:
         with st.expander("Admin controls"):
             refresh_taste = st.checkbox("Refresh Spotify taste", value=False)
-            top_artist_search_count = st.slider("Top Spotify artists searched directly", 10, 40, top_artist_search_count, step=5)
+            st.caption("Top 40 Spotify artists are searched directly.")
             use_feedback_model_toggle = st.checkbox("Use feedback model", value=True)
             use_saved_history_toggle = st.checkbox("Use saved history", value=True)
 
@@ -1771,7 +1801,7 @@ with st.sidebar:
     seatgeek_pages = int(speed_config["seatgeek_pages"])
     price_enrichment_limit = int(speed_config["price_enrichment_limit"])
     display_page_size = int(speed_config["display_page_size"])
-    top_artist_search_count = min(int(top_artist_search_count), int(speed_config["top_artist_search_count"]))
+    top_artist_search_count = int(speed_config["top_artist_search_count"])
 
     if ADMIN_MODE:
         status = model_status()

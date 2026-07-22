@@ -223,8 +223,8 @@ def rank_events_v6(
     all_embeddings = embed_texts([user_text] + event_texts)
     user_embedding = all_embeddings[0]
     event_embeddings = all_embeddings[1:]
-    if str(os.environ.get("ENABLE_VECTOR_UPSERT", "false")).strip().lower() in {"1", "true", "yes", "on"}:
-        # Skip slow Chroma writes during ordinary recommendation requests.
+    # Keep normal recommendation requests read-only and fast.
+    # Set ENABLE_VECTOR_UPSERT=true only for an intentional admin indexing run.
     if str(os.environ.get("ENABLE_VECTOR_UPSERT", "false")).strip().lower() in {
         "1", "true", "yes", "on"
     }:
