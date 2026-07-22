@@ -208,7 +208,7 @@ from datetime import datetime as _cc_datetime
 def _cc_event_score(event):
     if not isinstance(event, dict):
         return 0.0
-    for k in ["model_score", "final_score", "score", "recommendation_score", "copilot_score", "rank_score"]:
+    for k in ["final_score", "model_score", "score", "recommendation_score", "copilot_score", "rank_score"]:
         v = event.get(k)
         try:
             if v not in (None, ""):
@@ -230,6 +230,70 @@ def _cc_match_score_label(event):
         score *= 100.0
     score = max(0.0, min(score, 99.0))
     return f"Match Score {score:.1f}"
+
+
+def _cc_score_tier(event):
+    score = float(_cc_event_score(event) or 0.0)
+    if 0 < score <= 1:
+        score *= 100.0
+    if score >= 92:
+        return "Exceptional match", "tier-exceptional"
+    if score >= 84:
+        return "Strong match", "tier-strong"
+    if score >= 72:
+        return "Good discovery", "tier-good"
+    if score >= 55:
+        return "Possible fit", "tier-possible"
+    return "Exploratory", "tier-exploratory"
+
+
+def _cc_num(value, default=0.0):
+    try:
+        return float(value if value not in (None, "") else default)
+    except Exception:
+        return float(default)
+
+
+def _cc_strength(value):
+    value = _cc_num(value)
+    if value >= 75:
+        return "Excellent"
+    if value >= 55:
+        return "Strong"
+    if value >= 35:
+        return "Moderate"
+    return "Exploratory"
+
+
+def _cc_signal_summary(event):
+    direct = int(event.get("has_direct_artist_match") or 0) == 1
+    artist_value = max(
+        _cc_num(event.get("direct_artist_rank_score")),
+        _cc_num(event.get("track_affinity_score")),
+        _cc_num(event.get("spotify_durability_score")),
+    )
+    artist_fit = "Excellent" if direct else _cc_strength(artist_value)
+    taste_fit = _cc_strength(event.get("genre_cluster_score"))
+    discovery_value = max(
+        _cc_num(event.get("embedding_rank_score")),
+        _cc_num(event.get("discovery_quality_score")),
+    )
+    return {
+        "Artist fit": artist_fit,
+        "Taste lane": taste_fit,
+        "Discovery": _cc_strength(discovery_value),
+    }
+
+
+def _cc_known_price_text(event):
+    value = _cc_price(event)
+    return None if value is None else f"From ${value:.0f}"
+
+
+def _cc_calendar_filename(event):
+    title = _cc_event_title(event) or "concert"
+    safe = re.sub(r"[^A-Za-z0-9]+", "-", title).strip("-").lower()
+    return f"{safe or 'concert'}.ics"
 
 def _cc_clean_text(v):
     if v is None:
@@ -762,7 +826,7 @@ def _dedupe_events_for_display(events):
 
 # === end HOTFIX V34 helpers ===
 
-st.set_page_config(page_title="Encore AI V40 — Stable Final", page_icon="🎧", layout="wide")
+st.set_page_config(page_title="Encore AI — Personalized Concerts", page_icon="🎧", layout="wide")
 init_db()
 
 for key, default in {
@@ -1051,6 +1115,26 @@ div[data-testid="stVerticalBlockBorderWrapper"]:hover{
   letter-spacing:.08em;
   text-transform:uppercase;
 }
+
+/* Encore AI Elite V1 */
+.match-tier{display:inline-flex;border-radius:999px;padding:6px 10px;font-size:.75rem;font-weight:850;border:1px solid transparent}
+.tier-exceptional{background:#171b26;color:#fff;border-color:#171b26}
+.tier-strong{background:#edf9f1;color:#24643a;border-color:#c4e8ce}
+.tier-good{background:#eef3ff;color:#335fa8;border-color:#d4def5}
+.tier-possible{background:#fff6e9;color:#9a5d12;border-color:#f0d8b3}
+.tier-exploratory{background:#f4f5f8;color:#687083;border-color:#e2e5ec}
+.fit-signal-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:.75rem 0 .15rem}
+.fit-signal{background:#f8f9fc;border:1px solid #e7eaf1;border-radius:14px;padding:9px 11px}
+.fit-signal-label{font-size:.67rem;text-transform:uppercase;letter-spacing:.09em;color:#8a92a3;font-weight:900}
+.fit-signal-value{font-size:.84rem;color:#252b38;font-weight:850;margin-top:2px}
+.elite-decision{background:linear-gradient(135deg,#171b26,#2a3040);color:#fff;border-radius:22px;padding:18px 20px;margin:.8rem 0 1rem;box-shadow:0 18px 38px rgba(17,24,39,.16)}
+.elite-decision-label{font-size:.69rem;letter-spacing:.13em;text-transform:uppercase;color:#ff8d87;font-weight:900}
+.elite-decision-title{font-family:'Bricolage Grotesque',Inter,sans-serif;font-size:1.35rem;font-weight:850;letter-spacing:-.025em;margin:6px 0 4px}
+.elite-decision-copy{font-size:.9rem;line-height:1.45;color:#d8dce5}
+.copilot-tradeoff{font-size:.78rem;line-height:1.4;color:#7a8295;margin-top:8px}
+.plan-control-shell{background:#f8f9fc;border:1px solid #e7eaf1;border-radius:18px;padding:14px 16px;margin:.65rem 0 1rem}
+@media(max-width:800px){.fit-signal-grid{grid-template-columns:1fr}.match-tier{margin-top:4px}}
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -1166,6 +1250,7 @@ def _unique_pick(candidates: List[Dict[str, Any]], used: set) -> Dict[str, Any] 
 
 
 
+
 def render_top_picks(events: List[Dict[str, Any]], session_id: str) -> None:
     events = sorted(_dedupe_events_for_display(events or []), key=lambda e: _cc_event_score(e), reverse=True)
     if not events:
@@ -1179,24 +1264,27 @@ def render_top_picks(events: List[Dict[str, Any]], session_id: str) -> None:
     )
     discovery = sorted(
         [e for e in events if int(e.get("has_direct_artist_match") or 0) == 0],
-        key=lambda e: _cc_event_score(e),
+        key=lambda e: _cc_num(e.get("discovery_quality_score")) * .45 + _cc_num(e.get("genre_cluster_score")) * .25 + _cc_event_score(e) * .30,
         reverse=True,
     )
     night_out = sorted(
         events,
-        key=lambda e: (
-            _cc_event_score(e) * .62
-            + float(e.get("venue_quality_signal") or 0) * .20
-            + (12 if _is_weekend_event(e) else 0)
-            + (6 if e.get("min_price") is not None else 0)
-        ),
+        key=lambda e: _cc_event_score(e) * .58 + _cc_num(e.get("venue_quality_signal")) * .24 + (12 if _is_weekend_event(e) else 0) + (6 if _cc_price(e) is not None else 0),
         reverse=True,
     )
+    priced = [e for e in events if _cc_price(e) is not None]
+    value = sorted(
+        priced,
+        key=lambda e: _cc_event_score(e) * .70 + _cc_num(e.get("price_score")) * .25 + min(_cc_num(e.get("source_count"), 1), 3) * 2,
+        reverse=True,
+    )
+    weekend = sorted([e for e in events if _is_weekend_event(e)], key=lambda e: _cc_event_score(e), reverse=True)
 
     definitions = [
         ("Best match", events),
-        ("Direct artist", direct or events),
+        ("Artist you know", direct or events),
         ("Discovery pick", discovery or events),
+        ("Best value" if value else "Weekend pick", value or weekend or events),
         ("Best night out", night_out),
     ]
 
@@ -1206,65 +1294,49 @@ def render_top_picks(events: List[Dict[str, Any]], session_id: str) -> None:
         if pick:
             picks.append((label, pick))
 
-    if not picks:
-        return
-
     st.markdown(
-        '<div class="top-picks-title">Your Top Picks</div>'
-        '<div class="top-picks-sub">Four standout shows, each picked for a different reason.</div>',
+        '<div class="top-picks-title">The five shows to know</div>'
+        '<div class="top-picks-sub">A short list built for different ways you might want to spend the night.</div>',
         unsafe_allow_html=True,
     )
 
-    cols = st.columns(len(picks))
-    for idx, ((label, event), col) in enumerate(zip(picks, cols)):
-        with col:
-            title = escape(_cc_event_title(event) or "Concert")
-            meta = escape(f"{format_when(event)} · {_cc_event_venue(event)}")
-            image_url = event.get("image_url")
-            image_html = (
-                f'<img class="top-pick-image" src="{escape(str(image_url))}" alt="{title}">'
-                if image_url
-                else '<div class="top-pick-image-fallback">Encore pick</div>'
-            )
-            reason = str(
-                event.get("why_artist_match")
-                or event.get("why_recommended")
-                or f"A strong match for your {_cc_display_lane(event)} taste."
-            ).strip()
-            if len(reason) > 145:
-                reason = reason[:142].rstrip() + "…"
+    for row_start in range(0, len(picks), 3):
+        row_picks = picks[row_start:row_start + 3]
+        cols = st.columns(len(row_picks))
+        for local_idx, ((label, event), col) in enumerate(zip(row_picks, cols)):
+            idx = row_start + local_idx
+            with col:
+                title = escape(_cc_event_title(event) or "Concert")
+                meta = escape(f"{format_when(event)} · {_cc_event_venue(event)}")
+                image_url = event.get("image_url")
+                image_html = f'<img class="top-pick-image" src="{escape(str(image_url))}" alt="{title}">' if image_url else '<div class="top-pick-image-fallback">Encore pick</div>'
+                reason = str(event.get("why_artist_match") or event.get("why_recommended") or f"A strong match for your {_cc_display_lane(event)} taste.").strip()
+                if len(reason) > 150:
+                    reason = reason[:147].rstrip() + "…"
+                tier, tier_class = _cc_score_tier(event)
+                price_text = _cc_known_price_text(event)
+                price_html = f'<div class="top-pick-meta">{escape(price_text)}</div>' if price_text else ""
 
-            st.markdown(
-                f'''<div class="top-pick-card">
-                    {image_html}
-                    <div class="top-pick-body">
-                      <div class="top-pick-label">{escape(label)}</div>
-                      <div class="top-pick-title">{title}</div>
-                      <div class="top-pick-meta">{meta}</div>
-                      <div class="top-pick-score">{escape(_cc_match_score_label(event))}</div>
-                      <div class="top-pick-reason">{escape(reason)}</div>
-                    </div>
-                </div>''',
-                unsafe_allow_html=True,
-            )
-
-            action_a, action_b = st.columns(2)
-            links = event_links(event)
-            with action_a:
-                if links:
-                    st.link_button("Tickets", links[0], use_container_width=True)
-                else:
-                    st.button(
-                        "Tickets",
-                        key=f"top_pick_ticket_disabled_{session_id}_{idx}",
-                        disabled=True,
-                        use_container_width=True,
-                    )
-            with action_b:
-                if st.button("Plan", key=f"top_pick_plan_{session_id}_{idx}", use_container_width=True):
-                    st.session_state.plan_event_id = event.get("event_id")
-                    st.session_state.plan_source_request = "Recommended list"
-                    st.toast("Ready in Copilot → Plan a Night")
+                st.markdown(
+                    f'''<div class="top-pick-card">{image_html}<div class="top-pick-body">
+                    <div class="top-pick-label">{escape(label)}</div><div class="top-pick-title">{title}</div>
+                    <div class="top-pick-meta">{meta}</div>{price_html}
+                    <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px">
+                    <div class="top-pick-score">{escape(_cc_match_score_label(event))}</div>
+                    <div class="match-tier {tier_class}">{escape(tier)}</div></div>
+                    <div class="top-pick-reason">{escape(reason)}</div></div></div>''',
+                    unsafe_allow_html=True,
+                )
+                action_a, action_b = st.columns(2)
+                links = event_links(event)
+                with action_a:
+                    if links:
+                        st.link_button("Tickets", links[0], use_container_width=True)
+                with action_b:
+                    if st.button("Plan", key=f"top_pick_plan_{session_id}_{idx}", use_container_width=True):
+                        st.session_state.plan_event_id = event.get("event_id")
+                        st.session_state.plan_source_request = "Recommended list"
+                        st.toast("Ready in Copilot → Plan a Night")
 
 def render_stats_strip(ranked_count: int, direct_count: int, price_coverage: int, model_active: bool, bundle: Dict[str, Any] | None = None) -> None:
     """V29: cleaner Simple Copilot with request-window aware picks and fewer tabs."""
@@ -1533,6 +1605,7 @@ def reason_tags_html(event):
 
 
 
+
 def render_event_card(event: Dict[str, Any], idx: int, section: str, user, session_id, extra_badge=None):
     event = _cc_add_spotify_fields(dict(event or {}))
     title = event.get("event_name") or "Untitled event"
@@ -1544,6 +1617,8 @@ def render_event_card(event: Dict[str, Any], idx: int, section: str, user, sessi
     lane_copy = event.get("why_taste_lane") or ""
     reason_key = f"reason_{section}_{session_id}_{event.get('event_id')}_{idx}"
     links = event_links(event)
+    tier, tier_class = _cc_score_tier(event)
+    signals = _cc_signal_summary(event)
 
     spotify_links = event.get("artist_spotify_urls") or []
     spotify_url = event.get("spotify_url") or _cc_spotify_url(event)
@@ -1554,135 +1629,81 @@ def render_event_card(event: Dict[str, Any], idx: int, section: str, user, sessi
 
     with st.container(border=True):
         poster_col, content_col = st.columns([0.18, 0.82], vertical_alignment="top")
-
         with poster_col:
             if event.get("image_url"):
-                st.markdown(
-                    f'<div class="poster-wrap"><img src="{escape(str(event.get("image_url")))}" alt="event poster"></div>',
-                    unsafe_allow_html=True,
-                )
+                st.markdown(f'<div class="poster-wrap"><img src="{escape(str(event.get("image_url")))}" alt="event poster"></div>', unsafe_allow_html=True)
             else:
                 st.markdown('<div class="poster-fallback">Event Poster</div>', unsafe_allow_html=True)
 
         with content_col:
-            header_html = (
+            st.markdown(
                 '<div class="card-topline">'
-                f'<span class="rank-chip">#{idx}</span>'
-                f'<span class="card-date">{escape(when)}</span>'
-                '</div>'
-                f'<div class="card-title">{escape(str(title))}</div>'
-                f'<div class="card-venue">{escape(venue_line)}</div>'
+                f'<span class="rank-chip">#{idx}</span><span class="card-date">{escape(when)}</span></div>'
+                f'<div class="card-title">{escape(str(title))}</div><div class="card-venue">{escape(venue_line)}</div>',
+                unsafe_allow_html=True,
             )
-            st.markdown(header_html, unsafe_allow_html=True)
 
             signal_parts = [
                 f'<span class="signal-pill badge-price">{escape(_cc_match_score_label(event))}</span>',
+                f'<span class="match-tier {tier_class}">{escape(tier)}</span>',
                 f'<span class="signal-pill"><span class="signal-dot dot-coral"></span>{escape(str(confidence))}</span>',
             ]
             if extra_badge:
-                signal_parts.append(
-                    f'<span class="signal-pill"><span class="signal-dot dot-blue"></span>{escape(str(extra_badge))}</span>'
-                )
+                signal_parts.append(f'<span class="signal-pill"><span class="signal-dot dot-blue"></span>{escape(str(extra_badge))}</span>')
             signal_parts.append(f'<span class="signal-pill no-dot">{escape(str(lane))}</span>')
-
-            recommendation_copy = str((why + " " + lane_copy).strip())
-            body_html = (
-                '<div class="signal-row">'
-                + "".join(signal_parts)
-                + '</div>'
-                '<div class="why-note">'
-                '<div class="why-label">Why it fits</div>'
-                f'<div class="why-copy">{escape(recommendation_copy)}</div>'
-                '</div>'
+            signal_cards = "".join(
+                f'<div class="fit-signal"><div class="fit-signal-label">{escape(label)}</div><div class="fit-signal-value">{escape(value)}</div></div>'
+                for label, value in signals.items()
             )
-            st.markdown(body_html, unsafe_allow_html=True)
+            recommendation_copy = str((why + " " + lane_copy).strip())
+            st.markdown(
+                '<div class="signal-row">' + "".join(signal_parts) + '</div>'
+                '<div class="fit-signal-grid">' + signal_cards + '</div>'
+                '<div class="why-note"><div class="why-label">Why it fits</div>'
+                f'<div class="why-copy">{escape(recommendation_copy)}</div></div>',
+                unsafe_allow_html=True,
+            )
 
             if ADMIN_MODE:
                 with st.popover("Feedback reasons"):
-                    st.multiselect(
-                        "Pick any that apply",
-                        FEEDBACK_REASON_OPTIONS,
-                        key=reason_key,
-                        help="Optional feedback for model testing.",
-                    )
+                    st.multiselect("Pick any that apply", FEEDBACK_REASON_OPTIONS, key=reason_key)
 
-            primary_actions = st.columns([1.05, 1.05, 1.25])
-
+            primary_actions = st.columns([1.05, 1.0, 1.0, 1.2])
             with primary_actions[0]:
                 if links:
                     st.link_button("Tickets →", links[0], type="primary", use_container_width=True)
-                else:
-                    st.button(
-                        "Tickets →",
-                        key=f"tickets_disabled_{section}_{session_id}_{event.get('event_id')}_{idx}",
-                        disabled=True,
-                        use_container_width=True,
-                    )
-
             with primary_actions[1]:
-                if st.button(
-                    "Plan night",
-                    key=f"plan_{section}_{session_id}_{event.get('event_id')}_{idx}",
-                    use_container_width=True,
-                ):
+                if st.button("Plan night", key=f"plan_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
                     st.session_state.plan_event_id = event.get("event_id")
                     st.session_state.plan_source_request = "Recommended list"
                     st.toast("Ready in Copilot → Plan a Night")
-
             with primary_actions[2]:
+                st.download_button(
+                    "Add to calendar",
+                    data=build_calendar_ics(event),
+                    file_name=_cc_calendar_filename(event),
+                    mime="text/calendar",
+                    key=f"calendar_{section}_{session_id}_{event.get('event_id')}_{idx}",
+                    use_container_width=True,
+                )
+            with primary_actions[3]:
                 st.link_button(spotify_label, spotify_url, use_container_width=True)
 
             st.markdown('<div class="save-label">Save to your playlist</div>', unsafe_allow_html=True)
             save_actions = st.columns(3)
-
             with save_actions[0]:
-                if st.button(
-                    "Want to go",
-                    key=f"want_{section}_{session_id}_{event.get('event_id')}_{idx}",
-                    use_container_width=True,
-                ):
-                    save_feedback_action(
-                        user,
-                        session_id,
-                        event,
-                        "want_to_go",
-                        rank_position=idx,
-                        feedback_reasons=_feedback_reason_value(reason_key),
-                    )
+                if st.button("Want to go", key=f"want_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
+                    save_feedback_action(user, session_id, event, "want_to_go", rank_position=idx, feedback_reasons=_feedback_reason_value(reason_key))
                     st.toast("Saved to Want")
                     st.rerun()
-
             with save_actions[1]:
-                if st.button(
-                    "Maybe",
-                    key=f"maybe_{section}_{session_id}_{event.get('event_id')}_{idx}",
-                    use_container_width=True,
-                ):
-                    save_feedback_action(
-                        user,
-                        session_id,
-                        event,
-                        "maybe",
-                        rank_position=idx,
-                        feedback_reasons=_feedback_reason_value(reason_key),
-                    )
+                if st.button("Maybe", key=f"maybe_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
+                    save_feedback_action(user, session_id, event, "maybe", rank_position=idx, feedback_reasons=_feedback_reason_value(reason_key))
                     st.toast("Saved to Maybe")
                     st.rerun()
-
             with save_actions[2]:
-                if st.button(
-                    "Not for me",
-                    key=f"no_{section}_{session_id}_{event.get('event_id')}_{idx}",
-                    use_container_width=True,
-                ):
-                    save_feedback_action(
-                        user,
-                        session_id,
-                        event,
-                        "not_for_me",
-                        rank_position=idx,
-                        feedback_reasons=_feedback_reason_value(reason_key),
-                    )
+                if st.button("Not for me", key=f"no_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
+                    save_feedback_action(user, session_id, event, "not_for_me", rank_position=idx, feedback_reasons=_feedback_reason_value(reason_key))
                     st.session_state.hidden_event_ids.add(str(event.get("event_id")))
                     st.toast("Hidden from recommendations")
                     st.rerun()
@@ -2257,14 +2278,17 @@ with main_tabs[2]:
     st.markdown('<div class="section-head">Copilot</div>', unsafe_allow_html=True)
     st.markdown('<div class="section-sub">Tell Encore what kind of night you want. It will compare your ranked shows and give you a clear recommendation.</div>', unsafe_allow_html=True)
 
-    copilot_speed_mode = st.radio(
-        "Copilot mode",
-        ["Quick answer", "Detailed answer"],
-        horizontal=True,
-        index=0,
-        help="Quick answer is best for a live demo. Detailed answer adds more planning context.",
-        key="copilot_speed_mode_v1",
-    )
+    if ADMIN_MODE:
+        copilot_speed_mode = st.radio(
+            "Copilot response",
+            ["Quick answer", "Detailed answer"],
+            horizontal=True,
+            index=0,
+            help="Detailed answer adds a longer grounded explanation.",
+            key="copilot_speed_mode_v1",
+        )
+    else:
+        copilot_speed_mode = "Quick answer"
     copilot_fast_mode = copilot_speed_mode == "Quick answer"
 
     _saved_events = active_playlist_events if 'active_playlist_events' in globals() else []
@@ -2470,10 +2494,9 @@ with main_tabs[2]:
     def _safe_score(context, label):
         scores = context.get('copilot_scores', {}) or {} if isinstance(context, dict) else {}
         key_map = {
-            'Recommended': 'request_match',
-            'Top artist match': 'top_artist',
-            'Most compatible': 'compatible',
-            'New discovery': 'discovery',
+            'Best choice': 'request_match',
+            'Artist you know': 'top_artist',
+            'Best discovery': 'discovery',
             'Best night out': 'night_out',
         }
         return scores.get(key_map.get(label, 'overall'), scores.get('overall', 0))
@@ -2593,41 +2616,41 @@ with main_tabs[2]:
         st.session_state.simple_night_plan = {'event': event, 'structured': structured, 'llm': llm_plan, 'style': style, 'notes': notes}
         return structured, llm_plan
 
-    def _plain_event_card(event, label, score=None, button_key_suffix=''):
+
+    def _plain_event_card(event, label, score=None, context=None, button_key_suffix=''):
         event = _hydrate_event(event or {})
+        context = context or {}
         title = _event_title(event)
         venue = _event_venue(event)
         city = _event_city(event)
         state = _event_state(event)
         when = _pretty_when(event)
-        price = _extract_price(event)
-        why = str(event.get('why_recommended') or event.get('why_artist_match') or event.get('why_it_fits') or 'Strong fit based on your taste, ranking signals, and event context.')
-        score_line = f"<div class='mini-score'>Copilot score {score:.2f}</div>" if isinstance(score, (int, float)) else ""
-        st.markdown(f"""
-        <div class="shortlist-card">
-          <div class="badge badge-direct">{label}</div>
-          <div class="shortlist-title">{title}</div>
-          <div class="shortlist-meta"><b>{when}</b> · {venue} · {city}, {state}</div>
-          <span class="badge">{price}</span>
-          <div class="shortlist-reason">{why}</div>
-          {score_line}
-        </div>
-        """, unsafe_allow_html=True)
+        why = str(event.get('why_recommended') or event.get('why_artist_match') or 'Strong fit based on your taste and event context.')
+        tier, tier_class = _cc_score_tier(event)
+        tradeoffs = context.get('tradeoffs') or []
+        tradeoff_text = "; ".join(str(x) for x in tradeoffs[:2])
+        price_text = _cc_known_price_text(event)
+        score_html = f"<span class='badge badge-price'>Decision score {float(score):.1f}</span>" if isinstance(score, (int, float)) else ""
+        price_html = f"<span class='badge'>{escape(price_text)}</span>" if price_text else ""
+        trade_html = f"<div class='copilot-tradeoff'><b>Tradeoff:</b> {escape(tradeoff_text)}.</div>" if tradeoff_text else "<div class='copilot-tradeoff'><b>Tradeoff:</b> No major caveat in the returned data.</div>"
+        st.markdown(
+            f'''<div class="shortlist-card"><div class="badge badge-direct">{escape(str(label))}</div>
+            <div class="shortlist-title">{escape(title)}</div><div class="shortlist-meta"><b>{escape(when)}</b> · {escape(venue)} · {escape(city)}, {escape(state)}</div>
+            <span class="match-tier {tier_class}">{escape(tier)}</span>{score_html}{price_html}
+            <div class="shortlist-reason"><b>Why it works:</b> {escape(why)}</div>{trade_html}</div>''',
+            unsafe_allow_html=True,
+        )
         url = _ticket_url(event)
-        b1, b2 = st.columns([1, 1])
+        b1, b2, b3 = st.columns(3)
         with b1:
             if st.button('Plan this night', key=f"auto_plan_{button_key_suffix}_{label}_{event.get('event_id') or title}", use_container_width=True):
                 with st.spinner('Building your plan...'):
                     _auto_plan(event, source='Copilot picks')
-                st.success('Night planned below. You can also open Plan a Night to edit it.')
         with b2:
             if url:
                 st.link_button('Tickets', url, use_container_width=True)
-                # V36 HOTFIX fallback Spotify button
-                try:
-                    st.link_button(event.get('spotify_label') or _cc_spotify_label(event), event.get('spotify_url') or _cc_spotify_url(event))
-                except Exception:
-                    pass
+        with b3:
+            st.download_button('Add to calendar', data=build_calendar_ics(event), file_name=_cc_calendar_filename(event), mime='text/calendar', key=f"copilot_calendar_{button_key_suffix}_{event.get('event_id') or title}", use_container_width=True)
 
     def _item_text(item, keys, default=''):
         if isinstance(item, dict):
@@ -2764,7 +2787,7 @@ with main_tabs[2]:
                     try:
                         picks = select_copilot_picks(contexts, situation='auto', user_goal=user_question)
                     except Exception:
-                        labels = ['Recommended', 'Top artist match', 'Most compatible', 'New discovery', 'Best night out']
+                        labels = ['Best choice', 'Artist you know', 'Best discovery', 'Best night out']
                         picks = {lab: (contexts[i] if i < len(contexts) else None) for i, lab in enumerate(labels)}
                     # Hydrate picks too.
                     for lab, ctx in list((picks or {}).items()):
@@ -2788,14 +2811,28 @@ with main_tabs[2]:
                 else:
                     st.warning(f"Date window detected: {req.get('label')}, but nothing in the retrieved list matched it. Expand sidebar dates or search again.")
             picks = result.get('picks') or {}
-            cols = st.columns(min(5, max(1, len(picks))))
-            for idx, (label, ctx) in enumerate(picks.items()):
-                if not ctx:
-                    continue
+            priority = ["Best choice", "Artist you know", "Best discovery", "Best night out"]
+            display_picks = [(label, picks.get(label)) for label in priority if picks.get(label)]
+            if not display_picks:
+                display_picks = [(label, ctx) for label, ctx in picks.items() if ctx][:4]
+
+            if display_picks:
+                _, best_ctx = display_picks[0]
+                best_event = _hydrate_event(best_ctx.get('event', best_ctx) if isinstance(best_ctx, dict) else best_ctx)
+                best_reason = str(best_event.get('why_recommended') or best_event.get('why_artist_match') or 'It has the strongest combination of taste fit and event context.')
+                st.markdown(
+                    f'''<div class="elite-decision"><div class="elite-decision-label">Encore's decision</div>
+                    <div class="elite-decision-title">{escape(_event_title(best_event))}</div>
+                    <div class="elite-decision-copy">{escape(best_reason)}</div></div>''',
+                    unsafe_allow_html=True,
+                )
+
+            cols = st.columns(min(4, max(1, len(display_picks))))
+            for idx, (label, ctx) in enumerate(display_picks):
                 event = _hydrate_event(ctx.get('event', ctx) if isinstance(ctx, dict) else ctx)
                 score = _safe_score(ctx, label) if isinstance(ctx, dict) else (event or {}).get('final_score')
                 with cols[idx % len(cols)]:
-                    _plain_event_card(event, label, score, button_key_suffix='ask')
+                    _plain_event_card(event, label, score, context=ctx if isinstance(ctx, dict) else None, button_key_suffix='ask')
             if st.session_state.get('simple_night_plan'):
                 st.markdown('---')
                 _render_plan(st.session_state.get('simple_night_plan'))
@@ -2836,14 +2873,30 @@ with main_tabs[2]:
             selected_label = st.selectbox('Choose a concert', options, index=default_index, key='simple_plan_event')
             selected_event = _hydrate_event(plan_pool[options.index(selected_label)])
             st.markdown(f"<div class='agent-context'><b>Selected:</b> {_event_title(selected_event)}<br><span>{_event_venue(selected_event)} · {_event_city(selected_event)}, {_event_state(selected_event)} · {_pretty_when(selected_event)} · {_extract_price(selected_event)}</span></div>", unsafe_allow_html=True)
-            n1, n2 = st.columns([1, 2])
+            action_cols = st.columns(3)
+            ticket_url = _ticket_url(selected_event)
+            with action_cols[0]:
+                if ticket_url:
+                    st.link_button('Tickets', ticket_url, use_container_width=True)
+            with action_cols[1]:
+                st.download_button('Add to calendar', data=build_calendar_ics(selected_event), file_name=_cc_calendar_filename(selected_event), mime='text/calendar', key='selected_plan_calendar', use_container_width=True)
+            with action_cols[2]:
+                st.link_button('Spotify', selected_event.get('spotify_url') or _cc_spotify_url(selected_event), use_container_width=True)
+
+            n1, n2, n3 = st.columns(3)
             with n1:
-                night_style = st.selectbox('Night style', ['auto', 'date night', 'chill', 'high energy', 'casual', 'group night', 'late night'], index=1, key='simple_night_style')
+                vibe_label = st.selectbox('Vibe', ['Date night', 'Friends', 'Low-key', 'High-energy', 'Budget-friendly', 'Upscale'], index=0, key='simple_night_style')
             with n2:
-                notes = st.text_area('Anything else?', value='Keep it easy. Good food or drinks nearby, no rushing, and a backup option.', height=90, key='simple_night_notes')
-            if st.button('Plan my night', type='primary', key='simple_build_night'):
-                with st.spinner('Building the night with venue, city, show time, nearby places, ratings, prices, and your notes...'):
-                    _auto_plan(selected_event, night_style, notes, source=source_for_plan)
+                budget_label = st.selectbox('Budget', ['Flexible', 'Keep it affordable', 'Under $75 before tickets', 'Special occasion'], index=0, key='simple_night_budget')
+            with n3:
+                travel_label = st.selectbox('Getting around', ['Keep everything close', 'Walking preferred', 'Rideshare is fine', 'Driving'], index=0, key='simple_night_travel')
+            notes = st.text_area('Anything else?', value='Good food or drinks nearby, no rushing, and one flexible backup option.', height=85, key='simple_night_notes')
+            style_map = {'Date night': 'date night', 'Friends': 'group night', 'Low-key': 'chill', 'High-energy': 'high energy', 'Budget-friendly': 'casual', 'Upscale': 'date night'}
+            night_style = style_map.get(vibe_label, 'date night')
+            combined_notes = f"{notes} Budget preference: {budget_label}. Transportation preference: {travel_label}."
+            if st.button('Build my night', type='primary', key='simple_build_night', use_container_width=True):
+                with st.spinner('Building your night...'):
+                    _auto_plan(selected_event, night_style, combined_notes, source=source_for_plan)
             _render_plan(st.session_state.get('simple_night_plan'))
 
 # ---------------- Taste ----------------

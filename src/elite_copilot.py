@@ -215,22 +215,26 @@ def enrich_candidate_context(events: List[Dict[str, Any]], vibe: str, radius_mil
     return contexts
 
 
+
 def _score_key_for_situation(situation: str) -> str:
     text = str(situation or "auto").lower()
-    if "artist" in text:
+    if any(word in text for word in ["value", "budget", "cheap", "affordable", "under $"]):
+        return "value"
+    if "artist" in text or "familiar" in text:
         return "top_artist"
     if "compatible" in text or "compat" in text:
         return "compatible"
     if "discover" in text or "new" in text:
         return "discovery"
-    if "date" in text:
+    if "date" in text or "romantic" in text:
         return "date_night"
     if "late" in text or "after" in text:
         return "late_night"
-    if "effort" in text or "easy" in text:
+    if "effort" in text or "easy" in text or "simple" in text:
         return "low_effort"
+    if "night out" in text or "fun night" in text:
+        return "night_out"
     return "overall"
-
 
 def _pick_unique(contexts: List[Dict[str, Any]], key: str, used: set) -> Optional[Dict[str, Any]]:
     candidates = [c for c in contexts if c.get("event_id") not in used]
@@ -243,26 +247,21 @@ def _pick_unique(contexts: List[Dict[str, Any]], key: str, used: set) -> Optiona
     return chosen
 
 
-def select_copilot_picks(contexts: List[Dict[str, Any]], situation: str = "auto", user_goal: str = "") -> Dict[str, Dict[str, Any]]:
-    """Return clearer Copilot sections: recommended, top artist, compatible, discovery, and night-out.
 
-    The first pick changes based on the selected situation. Late-night now really shifts toward
-    later shows and after-show place options instead of returning the same generic answer.
-    """
+def select_copilot_picks(contexts: List[Dict[str, Any]], situation: str = "auto", user_goal: str = "") -> Dict[str, Dict[str, Any]]:
     used = set()
-    request_key = _score_key_for_situation(situation)
-    for c in contexts:
-        scores = c.setdefault("copilot_scores", {})
+    intent = f"{situation or ''} {user_goal or ''}".strip()
+    request_key = _score_key_for_situation(intent)
+    for context in contexts:
+        scores = context.setdefault("copilot_scores", {})
         scores["request_match"] = scores.get(request_key, scores.get("overall", 0))
-    best_night_key = "late_night" if "late" in str(situation).lower() or "after" in str(situation).lower() else "night_out"
+    best_night_key = "late_night" if any(word in intent.lower() for word in ["late", "after"]) else "night_out"
     return {
-        "Recommended": _pick_unique(contexts, "request_match", used),
-        "Top artist match": _pick_unique(contexts, "top_artist", used),
-        "Most compatible": _pick_unique(contexts, "compatible", used),
-        "New discovery": _pick_unique(contexts, "discovery", used),
+        "Best choice": _pick_unique(contexts, "request_match", used),
+        "Artist you know": _pick_unique(contexts, "top_artist", used),
+        "Best discovery": _pick_unique(contexts, "discovery", used),
         "Best night out": _pick_unique(contexts, best_night_key, used),
     }
-
 
 def build_context_brief(contexts: List[Dict[str, Any]], picks: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     return {
@@ -307,7 +306,7 @@ Return exactly these sections:
 ## Copilot decision
 Pick the single best move and explain why in 2-3 sentences.
 ## Picks by purpose
-List Recommended, Top artist match, Most compatible, New discovery, and Best night out. Include one tradeoff each.
+Cover Best choice, Artist you know, Best discovery, and Best night out. Include one honest tradeoff each.
 ## Why this is not just the ranking model
 Explain how event fit, venue, timing, places, reviews/ratings, distance, place price level, and uncertainty changed the decision.
 ## What I would do next
@@ -329,7 +328,7 @@ Rules:
 
 def fallback_pick_summary(picks: Dict[str, Dict[str, Any]]) -> str:
     lines = ["## Copilot decision"]
-    best = picks.get("Best overall")
+    best = picks.get("Best choice")
     if best:
         lines.append(f"The strongest move is **{best.get('event_name')}** because it has the best combined music fit, confidence, and night-out score among the retrieved options.")
     else:

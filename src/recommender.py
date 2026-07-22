@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List
+import os
 import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -222,7 +223,8 @@ def rank_events_v6(
     all_embeddings = embed_texts([user_text] + event_texts)
     user_embedding = all_embeddings[0]
     event_embeddings = all_embeddings[1:]
-    upsert_events_to_chroma(events, event_texts, event_embeddings)
+    if str(os.environ.get("ENABLE_VECTOR_UPSERT", "false")).strip().lower() in {"1", "true", "yes", "on"}:
+        upsert_events_to_chroma(events, event_texts, event_embeddings)
 
     similarities = cosine_similarity(user_embedding.reshape(1, -1), event_embeddings).flatten()
     feature_rows = [
