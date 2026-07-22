@@ -340,6 +340,16 @@ def _safe_load_bundle(path: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _safe_load_bundle(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        bundle = joblib.load(path)
+        return bundle if isinstance(bundle, dict) and bundle.get("model") is not None else None
+    except Exception:
+        return None
+
+
 def load_feedback_model(variant: str = "current") -> Optional[Dict[str, Any]]:
     if variant == "previous":
         return _safe_load_bundle(previous_model_path())
