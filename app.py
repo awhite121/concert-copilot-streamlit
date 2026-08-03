@@ -59,6 +59,17 @@ from src.elite_copilot import (
 from src.event_grouping import collapse_ranked_events
 from src.genre_clusters import build_user_taste_clusters, cluster_label
 
+from src.elite_calendar import render_elite_calendar
+from src.elite_product import (
+    build_playlist_ics,
+    compact_reason as elite_compact_reason,
+    event_status_from_action,
+    price_text as elite_price_text,
+    render_event_map,
+    select_featured_picks,
+    trust_reasons,
+)
+
 
 # === PUBLIC PRODUCT MODE V1 ===
 def _secret_bool(name: str, default: bool = False) -> bool:
@@ -73,6 +84,13 @@ def _secret_bool(name: str, default: bool = False) -> bool:
 
 ADMIN_MODE = _secret_bool("ADMIN_MODE", False)
 PUBLIC_DEMO_MODE = _secret_bool("PUBLIC_DEMO_MODE", True) and not ADMIN_MODE
+
+
+# Calendar and shared links can preselect an event for Copilot.
+_plan_event_query = str(st.query_params.get("plan_event") or "").strip()
+if _plan_event_query:
+    st.session_state.plan_event_id = _plan_event_query
+    st.session_state.plan_source_request = "My Shows calendar"
 
 # Clear obsolete pagination state only once per browser session.
 if not st.session_state.get("_encore_pagination_migrated"):
@@ -1134,6 +1152,36 @@ div[data-testid="stVerticalBlockBorderWrapper"]:hover{
 .playlist-calendar-legend{color:#737b8c;font-size:.76rem;margin:.25rem 0 .75rem}
 .playlist-list-heading{font-family:'Bricolage Grotesque',Inter,sans-serif;font-size:1.15rem;font-weight:850;letter-spacing:-.02em;margin:1.2rem 0 .35rem}
 
+
+/* Encore AI Elite Complete V2 */
+.elite-section-row{display:flex;justify-content:space-between;align-items:flex-end;gap:14px;margin:.4rem 0 .7rem}
+.elite-section-title{font-family:'Bricolage Grotesque',Inter,sans-serif;font-size:1.45rem;font-weight:900;letter-spacing:-.035em;color:#171b26}
+.elite-section-copy{font-size:.88rem;color:#737b8c;margin-top:2px}
+.elite-count{display:inline-flex;align-items:center;border:1px solid #e5e8ef;background:#f7f8fb;color:#60697a;border-radius:999px;padding:7px 10px;font-size:.75rem;font-weight:850;white-space:nowrap}
+.elite-card-shell{border:1px solid #e4e7ee;border-radius:22px;background:#fff;box-shadow:0 12px 30px rgba(17,24,39,.045);padding:16px;margin:.7rem 0}
+.elite-card-title{font-family:'Bricolage Grotesque',Inter,sans-serif;font-size:1.35rem;line-height:1.08;font-weight:900;letter-spacing:-.035em;color:#171b26}
+.elite-card-meta{color:#697184;font-size:.86rem;margin:5px 0 10px}
+.elite-pill-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:.45rem 0 .7rem}
+.elite-pill{display:inline-flex;align-items:center;border-radius:999px;padding:6px 9px;font-size:.73rem;font-weight:850;border:1px solid #e2e5ec;background:#f7f8fb;color:#4f586b}
+.elite-pill-score{background:#edf9f1;border-color:#c4e8ce;color:#24643a}
+.elite-pill-direct{background:#fff2f1;border-color:#ffd4d1;color:#a6403d}
+.elite-pill-discovery{background:#eef3ff;border-color:#d5dff5;color:#335fa8}
+.elite-pill-saved{background:#f2f5ff;border-color:#d8dfff;color:#3c5bb3}
+.elite-reason{font-size:.91rem;line-height:1.48;color:#515a6d;border-left:3px solid #ff6a64;padding-left:12px;margin:.55rem 0 .8rem}
+.elite-detail-box{border:1px solid #e6e9f0;background:#f8f9fc;border-radius:16px;padding:12px 14px;margin:.5rem 0}
+.elite-detail-label{font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:#8b93a4;font-weight:900}
+.elite-detail-value{font-size:.85rem;color:#303746;font-weight:800;margin-top:3px}
+.elite-empty{border:1px dashed #d9dde7;background:#fafbfc;border-radius:20px;padding:28px;text-align:center;color:#687083}
+.elite-saved-card{border:1px solid #e5e8ef;border-radius:19px;padding:15px;background:#fff;margin:.65rem 0;box-shadow:0 9px 24px rgba(17,24,39,.035)}
+.elite-saved-title{font-family:'Bricolage Grotesque',Inter,sans-serif;font-size:1.08rem;font-weight:900;color:#1d2230;line-height:1.15}
+.elite-saved-meta{font-size:.8rem;color:#737b8c;margin-top:4px}
+.elite-saved-reason{font-size:.82rem;color:#626b7e;line-height:1.42;margin-top:8px}
+@media(max-width:850px){
+  .elite-section-row{align-items:flex-start;flex-direction:column}
+  .elite-count{display:none}
+  .elite-card-shell{padding:13px}
+}
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -1250,80 +1298,59 @@ def _unique_pick(candidates: List[Dict[str, Any]], used: set) -> Dict[str, Any] 
 
 
 
+
 def render_top_picks(events: List[Dict[str, Any]], session_id: str) -> None:
-    events = sorted(_dedupe_events_for_display(events or []), key=lambda e: _cc_event_score(e), reverse=True)
-    if not events:
+    events = sorted(
+        _dedupe_events_for_display(events or []),
+        key=lambda event: _cc_event_score(event),
+        reverse=True,
+    )
+    picks = select_featured_picks(events)
+    if not picks:
         return
 
-    used = set()
-    direct = sorted(
-        [e for e in events if int(e.get("has_direct_artist_match") or 0) == 1],
-        key=lambda e: _cc_event_score(e),
-        reverse=True,
-    )
-    discovery = sorted(
-        [e for e in events if int(e.get("has_direct_artist_match") or 0) == 0],
-        key=lambda e: _cc_num(e.get("discovery_quality_score")) * .45 + _cc_num(e.get("genre_cluster_score")) * .25 + _cc_event_score(e) * .30,
-        reverse=True,
-    )
-    night_out = sorted(
-        events,
-        key=lambda e: _cc_event_score(e) * .58 + _cc_num(e.get("venue_quality_signal")) * .24 + (12 if _is_weekend_event(e) else 0) + (6 if _cc_price(e) is not None else 0),
-        reverse=True,
-    )
-    priced = [e for e in events if _cc_price(e) is not None]
-    value = sorted(
-        priced,
-        key=lambda e: _cc_event_score(e) * .70 + _cc_num(e.get("price_score")) * .25 + min(_cc_num(e.get("source_count"), 1), 3) * 2,
-        reverse=True,
-    )
-    weekend = sorted([e for e in events if _is_weekend_event(e)], key=lambda e: _cc_event_score(e), reverse=True)
-
-    definitions = [
-        ("Best match", events),
-        ("Artist you know", direct or events),
-        ("Discovery pick", discovery or events),
-        ("Best value" if value else "Weekend pick", value or weekend or events),
-        ("Best night out", night_out),
-    ]
-
-    picks = []
-    for label, pool in definitions:
-        pick = _unique_pick(pool, used)
-        if pick:
-            picks.append((label, pick))
-
+    count_word = "show" if len(picks) == 1 else "shows"
     st.markdown(
-        '<div class="top-picks-title">The five shows to know</div>'
-        '<div class="top-picks-sub">A short list built for different ways you might want to spend the night.</div>',
+        '<div class="elite-section-row"><div>'
+        '<div class="elite-section-title">For you right now</div>'
+        f'<div class="elite-section-copy">{len(picks)} strong {count_word}, each picked for a different reason.</div>'
+        '</div></div>',
         unsafe_allow_html=True,
     )
 
     for row_start in range(0, len(picks), 3):
         row_picks = picks[row_start:row_start + 3]
-        cols = st.columns(len(row_picks))
-        for local_idx, ((label, event), col) in enumerate(zip(row_picks, cols)):
-            idx = row_start + local_idx
-            with col:
+        columns = st.columns(len(row_picks))
+        for local_index, ((label, event), column) in enumerate(zip(row_picks, columns)):
+            card_index = row_start + local_index
+            with column:
                 title = escape(_cc_event_title(event) or "Concert")
                 meta = escape(f"{format_when(event)} · {_cc_event_venue(event)}")
                 image_url = event.get("image_url")
-                image_html = f'<img class="top-pick-image" src="{escape(str(image_url))}" alt="{title}">' if image_url else '<div class="top-pick-image-fallback">Encore pick</div>'
-                reason = str(event.get("why_artist_match") or event.get("why_recommended") or f"A strong match for your {_cc_display_lane(event)} taste.").strip()
-                if len(reason) > 150:
-                    reason = reason[:147].rstrip() + "…"
-                tier, tier_class = _cc_score_tier(event)
-                price_text = _cc_known_price_text(event)
-                price_html = f'<div class="top-pick-meta">{escape(price_text)}</div>' if price_text else ""
+                image_html = (
+                    f'<img class="top-pick-image" src="{escape(str(image_url))}" alt="{title}">'
+                    if image_url
+                    else '<div class="top-pick-image-fallback">Encore pick</div>'
+                )
+                reason = elite_compact_reason(event, 145)
+                price = elite_price_text(event)
+                price_html = (
+                    f'<div class="top-pick-meta">{escape(price)}</div>'
+                    if price else ""
+                )
+                match_type = "Direct artist" if int(event.get("has_direct_artist_match") or 0) == 1 else "Discovery"
 
                 st.markdown(
                     f'''<div class="top-pick-card">{image_html}<div class="top-pick-body">
-                    <div class="top-pick-label">{escape(label)}</div><div class="top-pick-title">{title}</div>
+                    <div class="top-pick-label">{escape(label)}</div>
+                    <div class="top-pick-title">{title}</div>
                     <div class="top-pick-meta">{meta}</div>{price_html}
                     <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px">
-                    <div class="top-pick-score">{escape(_cc_match_score_label(event))}</div>
-                    <div class="match-tier {tier_class}">{escape(tier)}</div></div>
-                    <div class="top-pick-reason">{escape(reason)}</div></div></div>''',
+                      <div class="top-pick-score">{escape(_cc_match_score_label(event))}</div>
+                      <div class="elite-pill {'elite-pill-direct' if match_type == 'Direct artist' else 'elite-pill-discovery'}">{escape(match_type)}</div>
+                    </div>
+                    <div class="top-pick-reason">{escape(reason)}</div>
+                    </div></div>''',
                     unsafe_allow_html=True,
                 )
                 action_a, action_b = st.columns(2)
@@ -1331,10 +1358,21 @@ def render_top_picks(events: List[Dict[str, Any]], session_id: str) -> None:
                 with action_a:
                     if links:
                         st.link_button("Tickets", links[0], use_container_width=True)
+                    else:
+                        st.button(
+                            "Tickets unavailable",
+                            key=f"top_pick_no_ticket_{session_id}_{card_index}",
+                            disabled=True,
+                            use_container_width=True,
+                        )
                 with action_b:
-                    if st.button("Plan", key=f"top_pick_plan_{session_id}_{idx}", use_container_width=True):
+                    if st.button(
+                        "Plan",
+                        key=f"top_pick_plan_{session_id}_{card_index}",
+                        use_container_width=True,
+                    ):
                         st.session_state.plan_event_id = event.get("event_id")
-                        st.session_state.plan_source_request = "Recommended list"
+                        st.session_state.plan_source_request = "Featured recommendation"
                         st.toast("Ready in Copilot → Plan a Night")
 
 def render_stats_strip(ranked_count: int, direct_count: int, price_coverage: int, model_active: bool, bundle: Dict[str, Any] | None = None) -> None:
@@ -1605,139 +1643,193 @@ def reason_tags_html(event):
 
 
 
+
 @st.fragment
 def render_event_card(event: Dict[str, Any], idx: int, section: str, user, session_id, extra_badge=None):
     event = _cc_add_spotify_fields(dict(event or {}))
-    event_id = str(event.get("event_id") or "")
-    hidden_now = st.session_state.setdefault("hidden_event_ids", set())
-    if event_id and event_id in hidden_now:
+    event_id = str(event.get("event_id") or f"{section}_{idx}")
+    hidden_ids = st.session_state.setdefault("hidden_event_ids", set())
+    overrides = st.session_state.setdefault("preference_overrides", {})
+
+    if event_id in hidden_ids:
         return
 
-    instant_overrides = st.session_state.setdefault("instant_preference_overrides", {})
-    instant_action = instant_overrides.get(event_id)
-    if instant_action == "want_to_go":
-        extra_badge = "Saved · Want"
-    elif instant_action == "maybe":
-        extra_badge = "Saved · Maybe"
-    event_id = str(event.get("event_id") or "")
-    preference_overrides = st.session_state.setdefault("preference_overrides", {})
-    if event_id and event_id in st.session_state.get("hidden_event_ids", set()):
-        return
-    override_action = preference_overrides.get(event_id)
-    if override_action == "want_to_go":
-        extra_badge = "Saved · Want"
-    elif override_action == "maybe":
-        extra_badge = "Saved · Maybe"
+    current_action = overrides.get(event_id)
+    if current_action is None and extra_badge:
+        badge_text = str(extra_badge).lower()
+        if "want" in badge_text:
+            current_action = "want_to_go"
+        elif "maybe" in badge_text:
+            current_action = "maybe"
+
     title = event.get("event_name") or "Untitled event"
     venue_line = f"{event.get('venue') or 'Venue TBD'} · {event.get('city') or ''}, {event.get('state') or ''}".strip(" ·,")
     when = format_when(event)
-    lane = _cc_display_lane(event)
-    confidence = event.get("match_confidence") or "Taste match"
-    why = event.get("why_artist_match") or event.get("why_recommended") or "This event matches your broader listening profile."
-    lane_copy = event.get("why_taste_lane") or ""
-    reason_key = f"reason_{section}_{session_id}_{event.get('event_id')}_{idx}"
+    why = elite_compact_reason(event, 220)
     links = event_links(event)
-    tier, tier_class = _cc_score_tier(event)
-    signals = _cc_signal_summary(event)
+    direct = int(event.get("has_direct_artist_match") or 0) == 1
+    match_label = "Direct artist" if direct else "Discovery"
+    saved_label = event_status_from_action(current_action) if current_action else ""
 
     spotify_links = event.get("artist_spotify_urls") or []
-    spotify_url = event.get("spotify_url") or _cc_spotify_url(event)
+    spotify_target_url = event.get("spotify_url") or _cc_spotify_url(event)
     spotify_label = event.get("spotify_label") or _cc_spotify_label(event)
     if spotify_links and spotify_links[0].get("url"):
-        spotify_url = spotify_links[0].get("url")
+        spotify_target_url = spotify_links[0].get("url")
         spotify_label = f"Spotify · {spotify_links[0].get('artist') or 'Artist'}"
 
+    reason_key = f"reason_{section}_{session_id}_{event_id}_{idx}"
+
     with st.container(border=True):
-        poster_col, content_col = st.columns([0.18, 0.82], vertical_alignment="top")
+        poster_col, content_col = st.columns([0.20, 0.80], vertical_alignment="top")
         with poster_col:
             if event.get("image_url"):
-                st.markdown(f'<div class="poster-wrap"><img src="{escape(str(event.get("image_url")))}" alt="event poster"></div>', unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="poster-wrap"><img src="{escape(str(event.get("image_url")))}" alt="event poster"></div>',
+                    unsafe_allow_html=True,
+                )
             else:
-                st.markdown('<div class="poster-fallback">Event Poster</div>', unsafe_allow_html=True)
+                st.markdown('<div class="poster-fallback">Encore</div>', unsafe_allow_html=True)
 
         with content_col:
             st.markdown(
                 '<div class="card-topline">'
                 f'<span class="rank-chip">#{idx}</span><span class="card-date">{escape(when)}</span></div>'
-                f'<div class="card-title">{escape(str(title))}</div><div class="card-venue">{escape(venue_line)}</div>',
+                f'<div class="elite-card-title">{escape(str(title))}</div>'
+                f'<div class="elite-card-meta">{escape(venue_line)}</div>',
                 unsafe_allow_html=True,
             )
 
-            signal_parts = [
-                f'<span class="signal-pill badge-price">{escape(_cc_match_score_label(event))}</span>',
-                f'<span class="match-tier {tier_class}">{escape(tier)}</span>',
-                f'<span class="signal-pill"><span class="signal-dot dot-coral"></span>{escape(str(confidence))}</span>',
+            pills = [
+                f'<span class="elite-pill elite-pill-score">{escape(_cc_match_score_label(event))}</span>',
+                f'<span class="elite-pill {"elite-pill-direct" if direct else "elite-pill-discovery"}">{escape(match_label)}</span>',
             ]
-            if extra_badge:
-                signal_parts.append(f'<span class="signal-pill"><span class="signal-dot dot-blue"></span>{escape(str(extra_badge))}</span>')
-            signal_parts.append(f'<span class="signal-pill no-dot">{escape(str(lane))}</span>')
-            signal_cards = "".join(
-                f'<div class="fit-signal"><div class="fit-signal-label">{escape(label)}</div><div class="fit-signal-value">{escape(value)}</div></div>'
-                for label, value in signals.items()
-            )
-            recommendation_copy = str((why + " " + lane_copy).strip())
+            if saved_label and saved_label != "Saved":
+                pills.append(f'<span class="elite-pill elite-pill-saved">{escape(saved_label)}</span>')
             st.markdown(
-                '<div class="signal-row">' + "".join(signal_parts) + '</div>'
-                '<div class="fit-signal-grid">' + signal_cards + '</div>'
-                '<div class="why-note"><div class="why-label">Why it fits</div>'
-                f'<div class="why-copy">{escape(recommendation_copy)}</div></div>',
+                '<div class="elite-pill-row">' + "".join(pills) + '</div>'
+                f'<div class="elite-reason">{escape(why)}</div>',
                 unsafe_allow_html=True,
             )
 
-            if ADMIN_MODE:
-                with st.popover("Feedback reasons"):
-                    st.multiselect("Pick any that apply", FEEDBACK_REASON_OPTIONS, key=reason_key)
-
-            primary_actions = st.columns([1.05, 1.0, 1.0, 1.2])
-            with primary_actions[0]:
+            primary = st.columns([1.18, 1.0, 1.0, 1.0, 0.78])
+            with primary[0]:
                 if links:
-                    st.link_button("Tickets →", links[0], type="primary", use_container_width=True)
-            with primary_actions[1]:
-                if st.button("Plan night", key=f"plan_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
+                    st.link_button("Tickets", links[0], type="primary", use_container_width=True)
+                else:
+                    st.button(
+                        "Tickets",
+                        key=f"no_ticket_{section}_{session_id}_{event_id}_{idx}",
+                        disabled=True,
+                        use_container_width=True,
+                    )
+
+            with primary[1]:
+                if st.button(
+                    "Want" if current_action != "want_to_go" else "✓ Want",
+                    key=f"want_{section}_{session_id}_{event_id}_{idx}",
+                    type="primary" if current_action == "want_to_go" else "secondary",
+                    use_container_width=True,
+                ):
+                    save_feedback_action(
+                        user, session_id, event, "want_to_go",
+                        rank_position=idx,
+                        feedback_reasons=_feedback_reason_value(reason_key),
+                    )
+                    overrides[event_id] = "want_to_go"
+                    hidden_ids.discard(event_id)
+                    st.toast("Added to My Shows · Want")
+                    st.rerun(scope="fragment")
+
+            with primary[2]:
+                if st.button(
+                    "Maybe" if current_action != "maybe" else "✓ Maybe",
+                    key=f"maybe_{section}_{session_id}_{event_id}_{idx}",
+                    type="primary" if current_action == "maybe" else "secondary",
+                    use_container_width=True,
+                ):
+                    save_feedback_action(
+                        user, session_id, event, "maybe",
+                        rank_position=idx,
+                        feedback_reasons=_feedback_reason_value(reason_key),
+                    )
+                    overrides[event_id] = "maybe"
+                    hidden_ids.discard(event_id)
+                    st.toast("Added to My Shows · Maybe")
+                    st.rerun(scope="fragment")
+
+            with primary[3]:
+                if st.button(
+                    "Plan",
+                    key=f"plan_{section}_{session_id}_{event_id}_{idx}",
+                    use_container_width=True,
+                ):
                     st.session_state.plan_event_id = event.get("event_id")
                     st.session_state.plan_source_request = "Recommended list"
                     st.toast("Ready in Copilot → Plan a Night")
-            with primary_actions[2]:
-                st.download_button(
-                    "Add to calendar",
-                    data=build_calendar_ics(event),
-                    file_name=_cc_calendar_filename(event),
-                    mime="text/calendar",
-                    key=f"calendar_{section}_{session_id}_{event.get('event_id')}_{idx}",
-                    use_container_width=True,
-                )
-            with primary_actions[3]:
-                st.link_button(spotify_label, spotify_url, use_container_width=True)
 
-            st.markdown('<div class="save-label">Save to your playlist</div>', unsafe_allow_html=True)
-            save_actions = st.columns(3)
-            with save_actions[0]:
-                if st.button("Want to go", key=f"want_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
-                    save_feedback_action(user, session_id, event, "want_to_go", rank_position=idx, feedback_reasons=_feedback_reason_value(reason_key))
-                    st.session_state.preference_overrides[event_id] = "want_to_go"
-                    st.session_state.hidden_event_ids.discard(event_id)
-                    st.toast("Saved to Want")
-                    st.rerun(scope="fragment")
+            with primary[4]:
+                with st.popover("More"):
+                    st.download_button(
+                        "Add to calendar",
+                        data=build_calendar_ics(event),
+                        file_name=_cc_calendar_filename(event),
+                        mime="text/calendar",
+                        key=f"calendar_{section}_{session_id}_{event_id}_{idx}",
+                        use_container_width=True,
+                    )
+                    st.link_button(spotify_label, spotify_target_url, use_container_width=True)
 
-            with save_actions[1]:
-                if st.button("Maybe", key=f"maybe_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
-                    save_feedback_action(user, session_id, event, "maybe", rank_position=idx, feedback_reasons=_feedback_reason_value(reason_key))
-                    st.session_state.preference_overrides[event_id] = "maybe"
-                    st.session_state.hidden_event_ids.discard(event_id)
-                    st.toast("Saved to Maybe")
-                    st.rerun(scope="fragment")
+                    if st.button(
+                        "Not for me",
+                        key=f"no_{section}_{session_id}_{event_id}_{idx}",
+                        use_container_width=True,
+                    ):
+                        save_feedback_action(
+                            user, session_id, event, "not_for_me",
+                            rank_position=idx,
+                            feedback_reasons=_feedback_reason_value(reason_key),
+                        )
+                        overrides[event_id] = "not_for_me"
+                        hidden_ids.add(event_id)
+                        st.toast("Hidden from recommendations · Undo from My Shows")
+                        st.rerun(scope="fragment")
 
-            with save_actions[2]:
-                if st.button("Not for me", key=f"no_{section}_{session_id}_{event.get('event_id')}_{idx}", use_container_width=True):
-                    save_feedback_action(user, session_id, event, "not_for_me", rank_position=idx, feedback_reasons=_feedback_reason_value(reason_key))
-                    st.session_state.preference_overrides[event_id] = "not_for_me"
-                    st.session_state.hidden_event_ids.add(event_id)
-                    st.toast("Hidden from recommendations")
-                    st.rerun(scope="fragment")
+                    if current_action and st.button(
+                        "Clear saved status",
+                        key=f"clear_{section}_{session_id}_{event_id}_{idx}",
+                        use_container_width=True,
+                    ):
+                        clear_feedback_preference(user.get("user_id", "unknown_user"), event.get("event_id"))
+                        overrides.pop(event_id, None)
+                        hidden_ids.discard(event_id)
+                        st.toast("Saved status cleared")
+                        st.rerun(scope="fragment")
+
+            with st.expander("Why this match"):
+                reasons = trust_reasons(event)
+                detail_columns = st.columns(3)
+                signals = _cc_signal_summary(event)
+                for column, (label, value) in zip(detail_columns, signals.items()):
+                    with column:
+                        st.markdown(
+                            f'<div class="elite-detail-box"><div class="elite-detail-label">{escape(label)}</div>'
+                            f'<div class="elite-detail-value">{escape(value)}</div></div>',
+                            unsafe_allow_html=True,
+                        )
+                for reason in reasons:
+                    st.markdown(f"• {escape(str(reason))}")
+                if ADMIN_MODE:
+                    st.multiselect(
+                        "Feedback reasons",
+                        FEEDBACK_REASON_OPTIONS,
+                        key=reason_key,
+                    )
+
 # ---------------- Sidebar ----------------
 with st.sidebar:
-    st.header("Find concerts")
-    profile_mode = st.radio("Taste profile", ["Spotify login", "Demo profile"], index=0)
+    st.header("Discover")
+    profile_mode = st.radio("Music profile", ["Spotify login", "Demo profile"], index=0)
     city = st.selectbox("City", CITY_OPTIONS, index=0, accept_new_options=True, help="Start typing to search or add a city.")
     inferred_state = infer_state_for_city(city, "TX")
     state_options = [inferred_state] + [value for value in STATE_OPTIONS if value != inferred_state]
@@ -1783,12 +1875,12 @@ with st.sidebar:
     group_mode = False
     group_name = "Friend"
     group_artist_text = ""
-    with st.expander("Going with someone?"):
+    with st.expander("Blend with a friend"):
         group_mode = st.checkbox("Blend our music taste", value=False)
         if group_mode:
             group_name = st.text_input("Their name", "Friend")
             group_artist_text = st.text_area("A few artists they love", "", height=70, placeholder="Mt. Joy, Noah Kahan, Fred again..")
-            st.caption("Encore AI will look for shows that work for both of you.")
+            st.caption("Encore blends both music profiles and surfaces the strongest shared matches.")
 
     refresh_taste = False
     top_artist_search_count = int(speed_config["top_artist_search_count"])
@@ -1986,7 +2078,7 @@ if ADMIN_MODE and source_counts.get("errors"):
     with st.expander("Source warnings"):
         st.json(source_counts.get("errors"))
 
-tab_labels = ["Discover", "Playlist", "Copilot", "Taste"]
+tab_labels = ["Discover", "My Shows", "Copilot", "Profile"]
 if ADMIN_MODE:
     tab_labels.append("Behind the Scenes")
 main_tabs = st.tabs(tab_labels)
@@ -2070,377 +2162,18 @@ def _dedupe_events_for_display(events):
 
 
 
+
 @st.fragment
 def render_playlist_month_calendar(playlist_df, user, session_id):
-    import calendar as _calendar
-
-    if playlist_df is None or playlist_df.empty:
-        return
-
-    def _normalized(value):
-        return "".join(
-            character.lower()
-            for character in str(value or "").strip()
-            if character.isalnum()
-        )
-
-    unique = {}
-    undated_count = 0
-
-    for row in playlist_df.to_dict(orient="records"):
-        event = _cc_add_spotify_fields(interaction_row_to_event(row))
-        raw_date = (
-            event.get("date")
-            or event.get("event_date")
-            or row.get("event_date")
-            or row.get("date")
-        )
-        parsed = pd.to_datetime(raw_date, errors="coerce")
-
-        if pd.isna(parsed):
-            undated_count += 1
-            continue
-
-        title = event.get("event_name") or event.get("title") or "Concert"
-        raw_time = (
-            event.get("event_time")
-            or event.get("time")
-            or row.get("event_time")
-            or ""
-        )
-        city = event.get("city") or row.get("city") or ""
-        dedupe_key = (
-            _normalized(title),
-            parsed.date().isoformat(),
-            str(raw_time)[:5],
-            _normalized(city),
-        )
-
-        candidate = {
-            "event": event,
-            "row": row,
-            "date": parsed.date(),
-            "action": str(row.get("action") or ""),
-            "created_at": str(row.get("created_at") or ""),
-        }
-
-        previous = unique.get(dedupe_key)
-        if previous is None:
-            unique[dedupe_key] = candidate
-            continue
-
-        previous_links = event_links(previous["event"])
-        candidate_links = event_links(candidate["event"])
-        candidate_quality = (
-            1 if candidate_links else 0,
-            1 if candidate["event"].get("image_url") else 0,
-            candidate["created_at"],
-        )
-        previous_quality = (
-            1 if previous_links else 0,
-            1 if previous["event"].get("image_url") else 0,
-            previous["created_at"],
-        )
-        if candidate_quality > previous_quality:
-            unique[dedupe_key] = candidate
-
-    dated_items = sorted(
-        unique.values(),
-        key=lambda item: (
-            item["date"],
-            str(item["event"].get("event_time") or item["event"].get("time") or ""),
-        ),
+    default_city = str(
+        (st.session_state.get("recommendation_run") or {}).get("city")
+        or ""
     )
-
-    if not dated_items:
-        st.info("Saved shows with confirmed dates will appear on your calendar.")
-        return
-
-    st.markdown(
-        '<div class="playlist-calendar-hero">'
-        '<div class="playlist-calendar-title">Your concert calendar</div>'
-        '<div class="playlist-calendar-copy">'
-        'Track every saved concert by month and day. Click a concert to open its ticket or event page.'
-        '</div></div>',
-        unsafe_allow_html=True,
-    )
-
-    month_keys = sorted({
-        (item["date"].year, item["date"].month)
-        for item in dated_items
-    })
-    month_labels = {
-        key: date(key[0], key[1], 1).strftime("%B %Y")
-        for key in month_keys
-    }
-
-    current_key = (date.today().year, date.today().month)
-    default_key = month_keys[-1]
-    for key in month_keys:
-        if key >= current_key:
-            default_key = key
-            break
-
-    state_key = "playlist_calendar_selected_month_v2"
-    if st.session_state.get(state_key) not in month_keys:
-        st.session_state[state_key] = default_key
-
-    selected_index = month_keys.index(st.session_state[state_key])
-    nav_left, month_column, nav_right = st.columns([0.45, 2.1, 0.45])
-
-    with nav_left:
-        if st.button(
-            "←",
-            key="playlist_calendar_previous_month_v2",
-            disabled=selected_index == 0,
-            use_container_width=True,
-        ):
-            st.session_state[state_key] = month_keys[selected_index - 1]
-            st.rerun(scope="fragment")
-
-    with month_column:
-        chosen_label = st.selectbox(
-            "Month",
-            [month_labels[key] for key in month_keys],
-            index=selected_index,
-            key="playlist_calendar_month_select_v2",
-        )
-        chosen_key = next(
-            key for key in month_keys
-            if month_labels[key] == chosen_label
-        )
-        if chosen_key != st.session_state[state_key]:
-            st.session_state[state_key] = chosen_key
-            st.rerun(scope="fragment")
-
-    with nav_right:
-        if st.button(
-            "→",
-            key="playlist_calendar_next_month_v2",
-            disabled=selected_index == len(month_keys) - 1,
-            use_container_width=True,
-        ):
-            st.session_state[state_key] = month_keys[selected_index + 1]
-            st.rerun(scope="fragment")
-
-    selected_key = st.session_state[state_key]
-    year, month = selected_key
-
-    city_values = sorted({
-        str(item["event"].get("city") or "").strip()
-        for item in dated_items
-        if str(item["event"].get("city") or "").strip()
-    })
-
-    status_col, city_col = st.columns(2)
-    with status_col:
-        status_filter = st.selectbox(
-            "Show",
-            [
-                "Upcoming Want + Maybe",
-                "Want",
-                "Maybe",
-                "All saved",
-                "Don't go",
-            ],
-            index=0,
-            key="playlist_calendar_status_v2",
-        )
-    with city_col:
-        city_filter = st.selectbox(
-            "City",
-            ["All cities"] + city_values,
-            index=0,
-            key="playlist_calendar_city_v2",
-        )
-
-    month_items = [
-        item for item in dated_items
-        if (item["date"].year, item["date"].month) == selected_key
-    ]
-
-    if status_filter == "Upcoming Want + Maybe":
-        month_items = [
-            item for item in month_items
-            if item["action"] in {"want_to_go", "maybe"}
-        ]
-    elif status_filter == "Want":
-        month_items = [
-            item for item in month_items
-            if item["action"] == "want_to_go"
-        ]
-    elif status_filter == "Maybe":
-        month_items = [
-            item for item in month_items
-            if item["action"] == "maybe"
-        ]
-    elif status_filter == "Don't go":
-        month_items = [
-            item for item in month_items
-            if item["action"] == "not_for_me"
-        ]
-
-    if city_filter != "All cities":
-        month_items = [
-            item for item in month_items
-            if str(item["event"].get("city") or "") == city_filter
-        ]
-
-    want_count = sum(item["action"] == "want_to_go" for item in month_items)
-    maybe_count = sum(item["action"] == "maybe" for item in month_items)
-    no_count = sum(item["action"] == "not_for_me" for item in month_items)
-
-    metrics = st.columns(4)
-    metrics[0].metric("Shows this month", len(month_items))
-    metrics[1].metric("Want", want_count)
-    metrics[2].metric("Maybe", maybe_count)
-    metrics[3].metric("Don't go", no_count)
-
-    st.markdown(
-        '<div class="playlist-calendar-legend">'
-        '★ Want &nbsp;&nbsp;&nbsp; ● Maybe &nbsp;&nbsp;&nbsp; × Don’t go'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-
-    weekday_columns = st.columns(7)
-    for column, label in zip(
-        weekday_columns,
-        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
-    ):
-        with column:
-            st.markdown(
-                f'<div class="playlist-calendar-weekday">{label}</div>',
-                unsafe_allow_html=True,
-            )
-
-    for week_index, week in enumerate(
-        _calendar.Calendar(firstweekday=0).monthdayscalendar(year, month)
-    ):
-        day_columns = st.columns(7)
-
-        for weekday_index, day_number in enumerate(week):
-            with day_columns[weekday_index]:
-                with st.container(border=True):
-                    if day_number == 0:
-                        st.write("")
-                        st.write("")
-                        continue
-
-                    st.markdown(
-                        f'<div class="playlist-calendar-day">{day_number}</div>',
-                        unsafe_allow_html=True,
-                    )
-
-                    day_items = [
-                        item for item in month_items
-                        if item["date"].day == day_number
-                    ]
-
-                    if not day_items:
-                        st.caption("—")
-                        continue
-
-                    for event_index, item in enumerate(day_items):
-                        event = item["event"]
-                        action = item["action"]
-
-                        icon = (
-                            "★" if action == "want_to_go"
-                            else "●" if action == "maybe"
-                            else "×"
-                        )
-
-                        title = str(
-                            event.get("event_name")
-                            or event.get("title")
-                            or "Concert"
-                        )
-                        compact_title = (
-                            title
-                            if len(title) <= 26
-                            else title[:24].rstrip() + "…"
-                        )
-
-                        raw_time = str(
-                            event.get("event_time")
-                            or event.get("time")
-                            or ""
-                        ).strip()
-                        if "T" in raw_time:
-                            raw_time = raw_time.split("T")[-1]
-                        raw_time = raw_time[:5]
-
-                        parsed_time = pd.to_datetime(
-                            raw_time,
-                            format="%H:%M",
-                            errors="coerce",
-                        )
-                        if pd.isna(parsed_time):
-                            time_label = raw_time
-                        else:
-                            try:
-                                time_label = parsed_time.strftime("%-I:%M %p")
-                            except Exception:
-                                time_label = parsed_time.strftime("%I:%M %p").lstrip("0")
-
-                        label = f"{icon} {time_label} {compact_title}".strip()
-                        links = event_links(event)
-
-                        if links:
-                            st.link_button(
-                                label,
-                                links[0],
-                                use_container_width=True,
-                            )
-                        else:
-                            stable_key = (
-                                str(event.get("event_id") or "")
-                                or f"{year}_{month}_{day_number}_{event_index}"
-                            )
-                            if st.button(
-                                label,
-                                key=f"playlist_calendar_no_link_{stable_key}",
-                                use_container_width=True,
-                            ):
-                                st.session_state.playlist_calendar_selected_event_v2 = event
-                                st.rerun(scope="fragment")
-
-                        venue = str(event.get("venue") or "").strip()
-                        if venue:
-                            st.caption(
-                                venue
-                                if len(venue) <= 28
-                                else venue[:26].rstrip() + "…"
-                            )
-
-    selected_event = st.session_state.get(
-        "playlist_calendar_selected_event_v2"
-    )
-    if selected_event:
-        selected_title = escape(str(selected_event.get("event_name") or "Concert"))
-        selected_when = escape(format_when(selected_event))
-        selected_venue = escape(str(selected_event.get("venue") or "Venue TBD"))
-        st.markdown(
-            (
-                '<div class="playlist-calendar-selected">'
-                f'<b>{selected_title}</b><br>'
-                f'<span>{selected_when} · {selected_venue}</span>'
-                '</div>'
-            ),
-            unsafe_allow_html=True,
-        )
-
-    if undated_count:
-        st.caption(
-            f"{undated_count} saved show"
-            f"{'s' if undated_count != 1 else ''} "
-            "without a confirmed event date remain available in the list below."
-        )
-
-    st.markdown(
-        '<div class="playlist-list-heading">Saved show list</div>',
-        unsafe_allow_html=True,
+    render_elite_calendar(
+        playlist_df,
+        interaction_row_to_event=interaction_row_to_event,
+        default_city=default_city,
+        key_prefix=f"my_shows_calendar_{session_id}",
     )
 
 
@@ -2450,58 +2183,86 @@ with main_tabs[0]:
         prefs_df, status_by_id, hidden_ids = preference_maps(user.get("user_id", "unknown_user"))
     else:
         prefs_df, status_by_id, hidden_ids = pd.DataFrame(), {}, set()
-    base_events = _dedupe_events_for_display([_cc_add_spotify_fields(e) for e in (ranked_events or [])])
+
+    base_events = _dedupe_events_for_display([
+        _cc_add_spotify_fields(event)
+        for event in (ranked_events or [])
+    ])
     render_top_picks(base_events, session_id)
-    venues = sorted({ _cc_event_venue(e) for e in base_events if _cc_event_venue(e) })
-    city_values_current = sorted({ _cc_event_city(e) for e in base_events if _cc_event_city(e) })
-    genre_options = ["All genres"] + sorted({str(_cc_genre(e)) for e in base_events if _cc_genre(e)})
+
+    venues = sorted({_cc_event_venue(event) for event in base_events if _cc_event_venue(event)})
+    city_values_current = sorted({_cc_event_city(event) for event in base_events if _cc_event_city(event)})
+    genre_options = ["All genres"] + sorted({
+        str(_cc_genre(event))
+        for event in base_events
+        if _cc_genre(event)
+    })
 
     st.markdown(
-        f'''<div class="recommendation-heading">
+        f'''<div class="elite-section-row">
               <div>
-                <div class="recommendation-heading-title">All recommendations</div>
-                <div class="recommendation-heading-copy">Browse the full ranked list, narrow it down, or save a show for later.</div>
+                <div class="elite-section-title">All shows</div>
+                <div class="elite-section-copy">Explore the full personalized list or narrow it to the kind of night you want.</div>
               </div>
-              <div class="recommendation-count">{len(base_events)} shows ranked</div>
+              <div class="elite-count">{len(base_events)} personalized shows found</div>
             </div>''',
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="quick-filter-title">Browse by fit</div>', unsafe_allow_html=True)
-    quick_filter = st.radio(
-        "Explore",
-        ["Best for me", "This weekend", "Direct matches", "New discoveries", "Date night", "Under $50", "Intimate venues"],
-        horizontal=True,
-        label_visibility="collapsed",
-        key="discover_quick_filter_public",
-    )
+    browse_col, view_col = st.columns([5.2, 1.2], vertical_alignment="bottom")
+    with browse_col:
+        st.markdown('<div class="quick-filter-title">Browse by fit</div>', unsafe_allow_html=True)
+        quick_filter = st.radio(
+            "Explore",
+            ["Best for me", "This weekend", "Direct matches", "New discoveries", "Date night", "Under $50", "Intimate venues"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="discover_quick_filter_elite_v2",
+        )
+    with view_col:
+        discover_view = st.radio(
+            "View",
+            ["List", "Map"],
+            horizontal=True,
+            key="discover_view_elite_v2",
+        )
 
-    discover_search_text = ""
-    discover_city = "All cities"
-    display_venue = "All venues"
-    discover_genre = "All genres"
-    show_hidden = False
     st.markdown('<div class="filter-panel-title">Search & filters</div>', unsafe_allow_html=True)
     with st.container(border=True):
-        f_search, f_city, f_venue, f_genre, f_hidden = st.columns([2.35, .95, 1.15, 1.05, .65], vertical_alignment="bottom")
+        f_search, f_city, f_venue, f_genre, f_hidden = st.columns(
+            [2.35, .95, 1.15, 1.05, .65],
+            vertical_alignment="bottom",
+        )
         with f_search:
             discover_search_text = st.text_input(
                 "Search artist, show, genre, venue",
                 placeholder="Type an artist, venue, or genre",
-                key="discover_search_text_v40",
+                key="discover_search_text_elite_v2",
             )
         with f_city:
-            discover_city = st.selectbox("City", ["All cities"] + city_values_current, key="discover_city_filter_v40")
+            discover_city = st.selectbox(
+                "City",
+                ["All cities"] + city_values_current,
+                key="discover_city_filter_elite_v2",
+            )
         with f_venue:
-            display_venue = st.selectbox("Venue", ["All venues"] + venues, key="discover_venue_filter_v40")
+            display_venue = st.selectbox(
+                "Venue",
+                ["All venues"] + venues,
+                key="discover_venue_filter_elite_v2",
+            )
         with f_genre:
-            discover_genre = st.selectbox("Genre", genre_options, key="discover_genre_v40")
+            discover_genre = st.selectbox(
+                "Genre",
+                genre_options,
+                key="discover_genre_elite_v2",
+            )
         with f_hidden:
             show_hidden = st.checkbox(
                 "Hidden",
                 value=False,
                 help="Show events marked Not for me.",
-                key="discover_hidden_v40",
+                key="discover_hidden_elite_v2",
             )
 
     visible = _cc_apply_discover_filters(
@@ -2513,165 +2274,326 @@ with main_tabs[0]:
         city_filter=discover_city,
         venue_filter=display_venue,
     )
+
     if not show_hidden:
-        visible = [event for event in visible if str(event.get("event_id")) not in hidden_ids and str(event.get("event_id")) not in st.session_state.hidden_event_ids]
+        visible = [
+            event for event in visible
+            if str(event.get("event_id")) not in hidden_ids
+            and str(event.get("event_id")) not in st.session_state.hidden_event_ids
+        ]
 
     visible = apply_quick_filter(visible, quick_filter)
 
     if use_saved_history_toggle:
-        # Normal product mode: saved Want first, saved Maybe second, then Match Score.
         visible = _cc_sort_saved_first(visible, status_by_id)
-        caption = f"Showing {len(visible)} of {len(base_events)} loaded shows. Saved Want and Maybe stay first, then new shows rank by Match Score."
     else:
-        # Clean test mode: ignore saved-first memory and rank by current recommender score only.
-        visible = sorted(visible, key=lambda e: _cc_event_score(e), reverse=True)
-        caption = f"Clean test: showing {len(visible)} of {len(base_events)} loaded shows. Saved history is ignored; current ranking score only."
+        visible = sorted(visible, key=lambda event: _cc_event_score(event), reverse=True)
 
     visible = _dedupe_events_for_display(visible)
     visible_total = len(visible)
-    visible = _cc_limit_visible_events(visible, key=f"discover_{session_id}", page_size=display_page_size)
+    st.caption(f"{visible_total} shows match the current view.")
 
     if not visible:
-        st.info("No concerts match the current filters. Clear search, widen filters, or turn on Hidden.")
-    for index, event in enumerate(visible, 1):
-        saved_badge = preference_label(status_by_id.get(str(event.get("event_id")))) if use_saved_history_toggle else None
-        extra = saved_badge or event.get("group_fit_label")
-        render_event_card(event, index, "feed", user, session_id, extra)
+        st.markdown(
+            '<div class="elite-empty"><b>No strong matches in this view.</b><br>'
+            'Try Best for me, clear the search field, widen the dates, or change the city.</div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("Reset Discover filters", key="reset_discover_elite_v2"):
+            for key in (
+                "discover_search_text_elite_v2",
+                "discover_city_filter_elite_v2",
+                "discover_venue_filter_elite_v2",
+                "discover_genre_elite_v2",
+                "discover_hidden_elite_v2",
+                "discover_quick_filter_elite_v2",
+            ):
+                st.session_state.pop(key, None)
+            st.rerun()
+    elif discover_view == "Map":
+        render_event_map(visible)
+        st.caption("Switch to List to save, compare, or plan an individual show.")
+    else:
+        limited_visible = _cc_limit_visible_events(
+            visible,
+            key=f"discover_elite_{session_id}",
+            page_size=display_page_size,
+        )
+        for index, event in enumerate(limited_visible, 1):
+            saved_badge = (
+                preference_label(status_by_id.get(str(event.get("event_id"))))
+                if use_saved_history_toggle else None
+            )
+            extra = saved_badge or event.get("group_fit_label")
+            render_event_card(event, index, "feed", user, session_id, extra)
 
-    _cc_render_load_more(
-        visible_total,
-        key=f"discover_{session_id}",
-        page_size=display_page_size,
-    )
+        _cc_render_load_more(
+            visible_total,
+            key=f"discover_elite_{session_id}",
+            page_size=display_page_size,
+        )
 
 
 # ---------------- Playlist ----------------
 with main_tabs[1]:
-    st.markdown('<div class="section-head">My Playlist</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-sub">Your personal shortlist of concerts you want to remember, compare, or plan.</div>', unsafe_allow_html=True)
-    playlist = load_playlist_preferences(user.get("user_id", "unknown_user")) if use_saved_history_toggle else pd.DataFrame()
+    st.markdown('<div class="section-head">My Shows</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-sub">The concerts you want to remember, compare, and plan.</div>',
+        unsafe_allow_html=True,
+    )
+    playlist = (
+        load_playlist_preferences(user.get("user_id", "unknown_user"))
+        if use_saved_history_toggle else pd.DataFrame()
+    )
 
     if not use_saved_history_toggle:
-        st.info("Your playlist is unavailable in this session.")
+        st.info("My Shows is unavailable in this test session.")
     elif playlist.empty:
-        st.info("Your playlist is empty. Save a show as Want or Maybe from Discover to add it here.")
-    else:
-        want_count = int((playlist["action"] == "want_to_go").sum())
-        maybe_count = int((playlist["action"] == "maybe").sum())
-        no_count = int((playlist["action"] == "not_for_me").sum())
-        active_saved_count = want_count + maybe_count
-        city_values = sorted([v for v in playlist.get("city", pd.Series(dtype=str)).dropna().unique().tolist() if v])
-        venue_values = sorted([v for v in playlist.get("venue", pd.Series(dtype=str)).dropna().unique().tolist() if v])
-
         st.markdown(
-            f"""<div class="shortlist-summary">
-                <div class="shortlist-summary-card"><div class="num">{len(playlist)}</div><div class="lbl">All shows</div></div>
-                <div class="shortlist-summary-card"><div class="num">{want_count}</div><div class="lbl">Want</div></div>
-                <div class="shortlist-summary-card"><div class="num">{maybe_count}</div><div class="lbl">Maybe</div></div>
-                <div class="shortlist-summary-card"><div class="num">{no_count}</div><div class="lbl">Don't go</div></div>
-              </div>""",
+            '<div class="elite-empty"><b>No saved shows yet.</b><br>'
+            'Use Want or Maybe on Discover and they will appear here.</div>',
             unsafe_allow_html=True,
         )
+    else:
+        playlist = playlist.copy()
+        parsed_dates = pd.to_datetime(
+            playlist.get("event_date", pd.Series(index=playlist.index, dtype=str)),
+            errors="coerce",
+        )
+        today_ts = pd.Timestamp(date.today())
 
-        render_playlist_month_calendar(playlist, user, session_id)
+        want_count = int((playlist["action"] == "want_to_go").sum())
+        maybe_count = int((playlist["action"] == "maybe").sum())
+        hidden_count = int((playlist["action"] == "not_for_me").sum())
+        upcoming_count = int(
+            (
+                playlist["action"].isin(["want_to_go", "maybe"])
+                & (parsed_dates.isna() | (parsed_dates >= today_ts))
+            ).sum()
+        )
 
-        f1, f2, f3, f4 = st.columns([1.35, 1.05, 1.2, 1.25])
-        with f1:
-            category = st.radio("Show", ["All shows", "Want", "Maybe", "Don't go"], horizontal=True)
-        with f2:
-            playlist_city = st.selectbox("City", ["All cities"] + city_values, key="playlist_city")
-        with f3:
-            playlist_venue = st.selectbox("Venue", ["All venues"] + venue_values, key="playlist_venue")
-        with f4:
-            sort_choice = st.selectbox("Sort", ["Soonest", "Best match", "Lowest price", "Recently saved"])
+        summary_a, summary_b = st.columns([4.5, 1.15], vertical_alignment="center")
+        with summary_a:
+            st.markdown(
+                f'''<div class="shortlist-summary">
+                    <div class="shortlist-summary-card"><div class="num">{upcoming_count}</div><div class="lbl">Upcoming</div></div>
+                    <div class="shortlist-summary-card"><div class="num">{want_count}</div><div class="lbl">Want</div></div>
+                    <div class="shortlist-summary-card"><div class="num">{maybe_count}</div><div class="lbl">Maybe</div></div>
+                    <div class="shortlist-summary-card"><div class="num">{hidden_count}</div><div class="lbl">Hidden</div></div>
+                  </div>''',
+                unsafe_allow_html=True,
+            )
+        with summary_b:
+            active_events_for_ics = [
+                interaction_row_to_event(row)
+                for row in playlist[
+                    playlist["action"].isin(["want_to_go", "maybe"])
+                ].to_dict(orient="records")
+            ]
+            st.download_button(
+                "Export My Shows",
+                data=build_playlist_ics(active_events_for_ics),
+                file_name="encore-ai-my-shows.ics",
+                mime="text/calendar",
+                use_container_width=True,
+                key="export_my_shows_elite_v2",
+            )
 
-        filtered_playlist = playlist.copy()
-        if category == "Want":
-            filtered_playlist = filtered_playlist[filtered_playlist["action"] == "want_to_go"]
-        elif category == "Maybe":
-            filtered_playlist = filtered_playlist[filtered_playlist["action"] == "maybe"]
-        elif category == "Don't go":
-            filtered_playlist = filtered_playlist[filtered_playlist["action"] == "not_for_me"]
-        if playlist_city != "All cities":
-            filtered_playlist = filtered_playlist[filtered_playlist["city"] == playlist_city]
-        if playlist_venue != "All venues":
-            filtered_playlist = filtered_playlist[filtered_playlist["venue"] == playlist_venue]
-        if sort_choice == "Soonest" and "event_date" in filtered_playlist.columns:
-            filtered_playlist = filtered_playlist.sort_values(["event_date", "event_time"], ascending=True)
-        elif sort_choice == "Best match" and "final_score" in filtered_playlist.columns:
-            filtered_playlist = filtered_playlist.sort_values("final_score", ascending=False)
-        elif sort_choice == "Lowest price" and "min_price" in filtered_playlist.columns:
-            filtered_playlist = filtered_playlist.assign(_price_sort=filtered_playlist["min_price"].fillna(999999)).sort_values("_price_sort", ascending=True).drop(columns=["_price_sort"])
-        elif "created_at" in filtered_playlist.columns:
-            filtered_playlist = filtered_playlist.sort_values("created_at", ascending=False)
+        view_choice = st.radio(
+            "My Shows view",
+            ["Upcoming", "Calendar", "Past", "Hidden"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="my_shows_view_elite_v2",
+        )
 
-        if filtered_playlist.empty:
-            st.info("No shows match those filters.")
-        for index, row in enumerate(filtered_playlist.to_dict(orient="records"), 1):
-            event = _cc_add_spotify_fields(interaction_row_to_event(row))
-            action = row.get("action")
-            if action == "want_to_go":
-                status_label = "Want"
-                status_class = "badge-direct"
-            elif action == "maybe":
-                status_label = "Maybe"
-                status_class = "badge-group"
+        if view_choice == "Calendar":
+            render_playlist_month_calendar(playlist, user, session_id)
+        else:
+            filtered_playlist = playlist.copy()
+            if view_choice == "Upcoming":
+                filtered_playlist = filtered_playlist[
+                    filtered_playlist["action"].isin(["want_to_go", "maybe"])
+                    & (parsed_dates.isna() | (parsed_dates >= today_ts))
+                ]
+            elif view_choice == "Past":
+                filtered_playlist = filtered_playlist[
+                    filtered_playlist["action"].isin(["want_to_go", "maybe"])
+                    & parsed_dates.notna()
+                    & (parsed_dates < today_ts)
+                ]
             else:
-                status_label = "Don't go"
-                status_class = "badge-warn"
-            links = event_links(event)
-            title = escape(str(event.get("event_name") or "Untitled event"))
-            venue_line = escape(f"{event.get('venue') or 'Venue TBD'} · {event.get('city') or ''}, {event.get('state') or ''}".strip(" ·,"))
-            when_line = escape(format_when(event))
-            reason = escape(str(event.get("why_recommended") or event.get("why_artist_match") or "Saved from your recommendation list."))
-            price_text, price_class = price_label(event)
-            col_main, col_img = st.columns([4.5, 1.25], vertical_alignment="top")
-            with col_main:
+                filtered_playlist = filtered_playlist[
+                    filtered_playlist["action"] == "not_for_me"
+                ]
+
+            city_values = sorted([
+                value for value in filtered_playlist.get(
+                    "city", pd.Series(dtype=str)
+                ).dropna().unique().tolist()
+                if value
+            ])
+            venue_values = sorted([
+                value for value in filtered_playlist.get(
+                    "venue", pd.Series(dtype=str)
+                ).dropna().unique().tolist()
+                if value
+            ])
+
+            filter_a, filter_b, filter_c = st.columns([1.0, 1.2, 1.0])
+            with filter_a:
+                playlist_city = st.selectbox(
+                    "City",
+                    ["All cities"] + city_values,
+                    key=f"my_shows_city_{view_choice}",
+                )
+            with filter_b:
+                playlist_venue = st.selectbox(
+                    "Venue",
+                    ["All venues"] + venue_values,
+                    key=f"my_shows_venue_{view_choice}",
+                )
+            with filter_c:
+                sort_choice = st.selectbox(
+                    "Sort",
+                    ["Soonest", "Best match", "Recently saved"],
+                    key=f"my_shows_sort_{view_choice}",
+                )
+
+            if playlist_city != "All cities":
+                filtered_playlist = filtered_playlist[
+                    filtered_playlist["city"] == playlist_city
+                ]
+            if playlist_venue != "All venues":
+                filtered_playlist = filtered_playlist[
+                    filtered_playlist["venue"] == playlist_venue
+                ]
+
+            if sort_choice == "Soonest" and "event_date" in filtered_playlist.columns:
+                filtered_playlist = filtered_playlist.sort_values(
+                    ["event_date", "event_time"],
+                    ascending=True,
+                    na_position="last",
+                )
+            elif sort_choice == "Best match" and "final_score" in filtered_playlist.columns:
+                filtered_playlist = filtered_playlist.sort_values(
+                    "final_score",
+                    ascending=False,
+                )
+            elif "created_at" in filtered_playlist.columns:
+                filtered_playlist = filtered_playlist.sort_values(
+                    "created_at",
+                    ascending=False,
+                )
+
+            rows = filtered_playlist.to_dict(orient="records")
+            total_rows = len(rows)
+            rows = _cc_limit_visible_events(
+                rows,
+                key=f"my_shows_{view_choice}_{session_id}",
+                page_size=20,
+            )
+
+            if not rows:
                 st.markdown(
-                    f"""<div class="shortlist-card">
-                        <div class="shortlist-title">{title}</div>
-                        <div class="shortlist-meta"><b>{when_line}</b> · {venue_line}</div>
-                        <span class="badge badge-price">{escape(_cc_match_score_label(event))}</span>
-                        <span class="badge {status_class}">{status_label}</span>
-                        <span class="badge">{escape(str(_cc_display_lane(event)))}</span>
-                        <div class="shortlist-reason">{reason}</div>
-                    </div>""",
+                    f'<div class="elite-empty">No {escape(view_choice.lower())} shows match these filters.</div>',
                     unsafe_allow_html=True,
                 )
-                controls = st.columns([1.0, 1.05, .85, .85, 1.0, 1.0])
-                with controls[0]:
-                    if links:
-                        st.link_button("Tickets", links[0], use_container_width=True)
-                        # V36 HOTFIX fallback Spotify button
-                        try:
-                            st.link_button(event.get('spotify_label') or _cc_spotify_label(event), event.get('spotify_url') or _cc_spotify_url(event))
-                        except Exception:
-                            pass
-                with controls[1]:
-                    if st.button("Plan night", key=f"playlist_plan_{event.get('event_id')}_{index}", use_container_width=True):
-                        st.session_state.plan_event_id = event.get("event_id")
-                        st.info("Saved this show for Plan a Night. Open Copilot → Plan a Night and it will be selected.")
-                with controls[2]:
-                    if action != "want_to_go" and st.button("Want", key=f"playlist_want_{event.get('event_id')}_{index}", use_container_width=True):
-                        save_feedback_action(user, session_id, event, "want_to_go", feedback_reasons=["Playlist update"])
-                        st.rerun()
-                with controls[3]:
-                    if action != "maybe" and st.button("Maybe", key=f"playlist_maybe_{event.get('event_id')}_{index}", use_container_width=True):
-                        save_feedback_action(user, session_id, event, "maybe", feedback_reasons=["Playlist update"])
-                        st.rerun()
-                with controls[4]:
-                    if action != "not_for_me" and st.button("Don't go", key=f"playlist_no_{event.get('event_id')}_{index}", use_container_width=True):
-                        save_feedback_action(user, session_id, event, "not_for_me", feedback_reasons=["Playlist hidden"])
-                        st.session_state.hidden_event_ids.add(str(event.get("event_id")))
-                        st.rerun()
-                with controls[5]:
-                    if st.button("Clear", key=f"playlist_clear_{event.get('event_id')}_{index}", use_container_width=True):
-                        clear_feedback_preference(user.get("user_id", "unknown_user"), event.get("event_id"))
-                        st.session_state.hidden_event_ids.discard(str(event.get("event_id")))
-                        st.rerun()
-            with col_img:
-                if event.get("image_url"):
-                    st.image(event.get("image_url"), use_container_width=True)
+
+            for index, row in enumerate(rows, 1):
+                event = _cc_add_spotify_fields(interaction_row_to_event(row))
+                action = str(row.get("action") or "")
+                status_label = event_status_from_action(action)
+                links = event_links(event)
+                title = escape(str(event.get("event_name") or "Untitled event"))
+                when_line = escape(format_when(event))
+                venue_line = escape(
+                    f"{event.get('venue') or 'Venue TBD'} · {event.get('city') or ''}, {event.get('state') or ''}".strip(" ·,")
+                )
+                reason = escape(elite_compact_reason(event, 180))
+                image_url = event.get("image_url")
+
+                main_col, image_col = st.columns([4.8, 1.1], vertical_alignment="top")
+                with main_col:
+                    st.markdown(
+                        f'''<div class="elite-saved-card">
+                            <div class="elite-saved-title">{title}</div>
+                            <div class="elite-saved-meta">{when_line} · {venue_line}</div>
+                            <div class="elite-pill-row">
+                              <span class="elite-pill elite-pill-score">{escape(_cc_match_score_label(event))}</span>
+                              <span class="elite-pill elite-pill-saved">{escape(status_label)}</span>
+                            </div>
+                            <div class="elite-saved-reason">{reason}</div>
+                          </div>''',
+                        unsafe_allow_html=True,
+                    )
+
+                    controls = st.columns([1.0, 1.0, .9, .9, .9])
+                    with controls[0]:
+                        if links:
+                            st.link_button("Tickets", links[0], use_container_width=True)
+                        else:
+                            st.button(
+                                "Tickets",
+                                key=f"saved_no_ticket_{view_choice}_{index}",
+                                disabled=True,
+                                use_container_width=True,
+                            )
+                    with controls[1]:
+                        if st.button(
+                            "Plan",
+                            key=f"saved_plan_{view_choice}_{event.get('event_id')}_{index}",
+                            use_container_width=True,
+                        ):
+                            st.session_state.plan_event_id = event.get("event_id")
+                            st.session_state.plan_source_request = "My Shows"
+                            st.toast("Ready in Copilot → Plan a Night")
+                    with controls[2]:
+                        if action != "want_to_go" and st.button(
+                            "Want",
+                            key=f"saved_want_{view_choice}_{event.get('event_id')}_{index}",
+                            use_container_width=True,
+                        ):
+                            save_feedback_action(
+                                user, session_id, event, "want_to_go",
+                                feedback_reasons=["My Shows update"],
+                            )
+                            st.rerun()
+                    with controls[3]:
+                        if action != "maybe" and st.button(
+                            "Maybe",
+                            key=f"saved_maybe_{view_choice}_{event.get('event_id')}_{index}",
+                            use_container_width=True,
+                        ):
+                            save_feedback_action(
+                                user, session_id, event, "maybe",
+                                feedback_reasons=["My Shows update"],
+                            )
+                            st.rerun()
+                    with controls[4]:
+                        if st.button(
+                            "Clear",
+                            key=f"saved_clear_{view_choice}_{event.get('event_id')}_{index}",
+                            use_container_width=True,
+                        ):
+                            clear_feedback_preference(
+                                user.get("user_id", "unknown_user"),
+                                event.get("event_id"),
+                            )
+                            st.session_state.hidden_event_ids.discard(
+                                str(event.get("event_id"))
+                            )
+                            st.rerun()
+
+                with image_col:
+                    if image_url:
+                        st.image(image_url, use_container_width=True)
+
+            _cc_render_load_more(
+                total_rows,
+                key=f"my_shows_{view_choice}_{session_id}",
+                page_size=20,
+            )
 
 # ---------------- Copilot ----------------
 with main_tabs[2]:
